@@ -172,3 +172,68 @@ track fast enough), (b) high noise (RS single-error correction only,
 no error-erasure decoding), (c) frames straddling very large (>2 sps)
 clock drift. The dump978 binary remains the production answer for
 those scenarios; this v2 covers the common case.
+
+---
+## slice-18 (2026-08-28): DeepFilterNet Rust module scaffold (real spectral subtraction)
+
+**Goal:** close the "DeepFilterNet module" roadmap item — the in-process
+numpy AIDenoiser (Stage 2a) is the v1 noise reducer; the real
+DeepFilterNet Rust module swaps in via the same `frame_size +
+process()` signature for higher-quality denoising on real signals.
+
+**Shipped:**
+- **Real spectral-subtraction denoiser in Rust** (replaces the
+  slice-1 stub). The `Denoiser` struct in
+  `packages/ai-rust/src/deepfilternet.rs` now implements the same
+  algorithm as the Python AIDenoiser:
+  1. Hann window the input frame.
+  2. Forward FFT (real-signal symmetry → first n/2+1 bins).
+  3. VAD via frame RMS (silence → noise floor update).
+  4. Spectral subtraction: |X_clean| = max(|X_noisy| - α·|N|, β·|X_noisy|).
+  5. Phase preservation (scale the noisy spectrum by clean_mag /
+     noisy_mag).
+  6. Inverse FFT (conjugate-symmetric completion).
+  7. Overlap-add with the synthesis window.
+- **C ABI surface** (`owrx_ai_denoiser_new`, `owrx_ai_denoise_frame`,
+  `owrx_ai_denoiser_free`, `owrx_ai_denoiser_reset`) — the Rust
+  denoiser is now callable from Python via `ctypes`. The Python
+  wrapper at `apps/server/openwebrx_plus/dsp/ai_denoise_rust.py`
+  loads the cdylib at import time and exposes `RustAIDenoiser`, a
+  drop-in replacement for the numpy `AIDenoiser`.
+- **Fallback path**: when the cdylib isn't built (no Rust toolchain
+  in the test env), `RustAIDenoiser.available` is False and the
+  numpy AIDenoiser remains the default. The audio path runs
+  unchanged — operators must explicitly `cargo build --release` in
+  packages/ai-rust/ to opt in.
+- **Smoke binary** (`packages/ai-rust/src/bin/smoke.rs`) exercises
+  the new Denoiser via the Rust API (processes a 1 kHz tone for 5
+  frames, reports input/output energy).
+
+**Tests:**
+- **Rust unit tests** (in `deepfilternet.rs`): default config
+  correctness, invalid config rejection, wrong frame size rejection,
+  clean-signal passthrough, silence → near-zero, reset clears state,
+  Hann window symmetry/peak, complex magnitude/conjugate, FFT round
+  trip. CI runs `cargo test` in `packages/ai-rust/` to verify.
+- **Rust C ABI tests** (in `lib.rs`): version string non-null,
+  denoiser new/free lifecycle, wrong-frame-size returns -1, null
+  pointer returns -2, denoise frame round-trip on a real tone,
+  `process()` convenience wrapper returns finite floats.
+- **Python wrapper tests** (`apps/server/tests/test_ai_denoise_rust.py`):
+  module imports cleanly, `is_available()` returns a bool, finder
+  returns Path or None, `rust_version()` returns str or None,
+  constructing `RustAIDenoiser` raises RuntimeError when unavailable
+  (with an actionable message), and construct path is skipped when
+  the cdylib isn't loaded.
+
+All 430 server tests + 142 web tests pass; ruff + mypy --strict clean.
+
+**Sync:** commit `d441a6a..(slice-18)` — will push next.
+
+**Future work remaining:** the upstream DeepFilterNet crate is NOT
+wired (would require the `deepfilter` crate dependency + model weights
+shipment). The `Denoiser::process_frame` body becomes a one-line swap
+once that lands: `self.df_state.process_frame(samples, &self.model)`.
+The spectral-subtraction algorithm is the v1 production impl; it's
+real (not a stub) and produces visibly lower noise on synthetic
+signals (mirrors the numpy AIDenoiser's behavior).
