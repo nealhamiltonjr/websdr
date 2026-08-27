@@ -87,6 +87,13 @@ jobs:
           test -f /usr/local/include/csdr/module.hpp || \
             { echo "libcsdr headers not installed"; exit 1; }
       - run: uv sync --frozen
+      # The *.cf32 IQ fixtures are gitignored (they are large binary
+      # blobs regenerable from scripts/generate_iq_fixtures.py with a
+      # deterministic seed). Bake them before pytest so tests that
+      # exercise the real pycsdr DSP chain against known IQ recordings
+      # (hf_20m_evening.cf32, adsb_1090.cf32, etc.) have their inputs.
+      - name: Bake IQ fixtures (deterministic, numpy-only)
+        run: uv run python ../../scripts/generate_iq_fixtures.py
       - run: uv run ruff check .
       - run: uv run mypy openwebrx_plus
       - run: uv run pytest
@@ -104,8 +111,12 @@ jobs:
         with:
           # build.zig uses `root_module` field on StaticLibraryOptions,
           # which is Zig 0.14+ API. 0.13.0 fails with "no field named
-          # 'root_module'". Bump to 0.14.1 (stable release as of 2025).
-          version: '0.14.1'
+          # 'root_module'". 0.14.0 is the earliest release with this API
+          # and is the version currently downloadable from ziglang.org.
+          # (Note: 0.14.1 is listed in ziglang.org/download/index.json
+          # but returns HTTP 404 for the actual tar.xz file as of
+          # 2026-08-27 — appears to be a release-side glitch.)
+          version: '0.14.0'
       - run: zig build
       - run: zig build test
 
