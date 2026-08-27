@@ -24,11 +24,19 @@ child binary emits flows through as event fields.
     ``OWRX_IQ_FORMAT``.
 
 Stock dump1090 releases speak SBS1 CSV on TCP ports instead of stdout
-NDJSON; point ``OPENWEBRX_PLUS_DUMP1090_BIN`` at a convention-speaking
-build or a thin wrapper that translates. The test suite drives a
-protocol-faithful fake binary (``tests/fakes/fake_dump1090.py``) which
-implements this contract exactly — including synthetic position fields —
-so the whole path is verifiable hardware-free.
+NDJSON; either point ``OPENWEBRX_PLUS_DUMP1090_BIN`` at a
+convention-speaking build, OR (slice-16) ship the SBS1 → NDJSON bridge
+at ``scripts/sbs1_to_ndjson.py`` (repo root). The bridge spawns a
+stock dump1090 with ``--net --net-sbs-port <ephemeral> --net-only``,
+connects to its SBS1 socket, and translates each ``MSG,...`` line into
+the OpenWebRX+ ``frame`` / ``aircraft`` event schema that this plugin
+expects (matches ``tests/fakes/fake_dump1090.py`` row shape). Example
+config:
+
+    OPENWEBRX_PLUS_DUMP1090_BIN=python3 scripts/sbs1_to_ndjson.py
+
+Live bring-up remains the operator's job: the fake binary pins the
+contract; the bridge only translates SBS1's CSV into the NDJSON schema.
 """
 
 from __future__ import annotations

@@ -30,3 +30,100 @@ Stage Summary:
 - All slices pushed via the SYNC-UP.md PAT-injection protocol (PAT URL inserted, push, immediately stripped).
 - CI verified green per slice (slice-12 f1c6d25 confirmed SUCCESS; slice-13/14 in_progress at log-write time).
 - Local HEAD `7192903` should match origin/main `7192903` after the slice-14 push.
+
+---
+## slice-15 (2026-08-28): SpyServer runtime tune forwarding
+
+**Goal:** close the "SpyServer polish" roadmap item from slice-14's STATUS.md
+— runtime tune forwarding via COMMAND_SET_IQ_FREQUENCY (replacing the
+offset-demod-only legacy path).
+
+**Shipped:**
+- New `RuntimeFrequencySource` Protocol alongside `RuntimeGainSource`
+  in `sources/base.py` (duck-typed; sources opt in by implementing
+  `set_runtime_frequency(hz: int) -> bool`).
+- `SpyServerSource.set_runtime_frequency`: queue-based, latest-wins,
+  mid-stream drain inside the existing read loop (mirrors the gain
+  pattern from slice-4.7). Pre-spawn calls drain at the top of the
+  first iteration so they apply alongside the initial
+  `_CMD_SET_IQ_FREQUENCY` configure send.
+- `ReceiverSession.set_frequency`: prefers source-retune over the
+  legacy `self.center_freq = freq` metadata-only update when the
+  source implements the protocol AND the stream is live. Falls through
+  to legacy on False or pre-start. The local AudioChain's Shift block
+  is built with `channel_offset_hz=0.0`, so once the source retunes
+  the demodulator naturally picks up the new center freq — no Shift
+  adjustment needed.
+
+**Tests:** 7 new (3 SpyServer wire + 4 ReceiverSession integration).
+All 404 server tests + 142 web tests pass; ruff + mypy --strict clean.
+
+**Sync:** commit `8bcb158` pushed to origin/main; CI run 33121962224
+completed `success` for all 5 jobs (Frontend, Backend, DSP, Shared
+Types, AI).
+
+**Live bring-up still pending:** the protocol literals are pinned by
+the in-repo fake server (sandbox egress is filtered). On the FIRST
+connection to a real SpyServer, verify: HELLO acceptance, SERVER_INFO
+body layout, message_type value on stream frames, SET_IQ_GAIN gain_type
+semantics, and the new COMMAND_SET_IQ_FREQUENCY SYNC ack timing. The
+constants in `sources/spyserver.py` `_*` namespace are the only place
+to fix.
+
+---
+## slice-16 (2026-08-28): dump1090 SBS1 → NDJSON wrapper (real-binary bring-up)
+
+**Goal:** close the "dump1090 real-binary bring-up" roadmap item —
+stock dump1090 / readsb / dump1090-mutability binaries speak SBS1
+CSV on TCP port 30003 (the BaseStation format), not stdout NDJSON.
+The OpenWebRX+ subprocess decoder contract needs the latter.
+
+**Shipped:**
+- New standalone script `scripts/sbs1_to_ndjson.py` (630 lines). The
+  bridge: picks an ephemeral SBS1 port, spawns the real dump1090
+  with `--ifile - --iformat SC16 --sample-rate 2000000 --quiet --net
+  --net-sbs-port <ephemeral> --net-only`, forwards stdin IQ (cf32 /
+  cs16 / cu8) → child's stdin (cs16, matching --iformat SC16),
+  connects to its SBS1 socket, parses each `MSG,...` CSV line (comma
+  OR pipe separator — forks differ), emits OpenWebRX+ `frame` events
+  on stdout. Coalesces aircraft snapshots every ~300 ms (matches
+  fake_dump1090.py's behavior).
+- Iq-format conversion: cf32 → cs16 (real/imag scaled by 32767,
+  symmetric), cu8 → cs16 (127.5 offset, ×257 scale), cs16 passthrough.
+- Graceful teardown: stdin EOF → close child stdin → 2 s wait →
+  SIGTERM → SIGKILL fallback. SIGTERM/SIGINT handlers forward to the
+  child. Child crash → `decoder_state=failed` event + exit 1 (the
+  runner's bounded crash-restart respawns us with backoff).
+- `--no-spawn` mode for run-it-yourself operators: bridges to an
+  already-running SBS1 emitter at --connect-host:--connect-port.
+- Plugin docstring (`plugins/dump1090.py`) updated to point operators
+  at the new wrapper: `OPENWEBRX_PLUS_DUMP1090_BIN=python3
+  scripts/sbs1_to_ndjson.py`.
+
+**Tests:** 15 new (`apps/server/tests/test_sbs1_bridge.py`):
+  - 7 SBS1 line parsing (non-MSG skip, empty ICAO skip, type 3 full
+    field translation, pipe-separator fork, type 1 callsign-only,
+    truncated row padding, ICAO normalization)
+  - 2 row merging (project + merge change-detection)
+  - 4 IQ format conversion (cs16 passthrough, cf32 → cs16 symmetric
+    scaling, odd-byte truncation, cu8 → cs16 center+scale, unsupported
+    format raises)
+  - 1 end-to-end: spawn the bridge → fake SBS1 server → expect
+    `ready` handshake + 3 frame events + aircraft snapshot with row
+    shape matching fake_dump1090.py (icao, callsign, lat, lon, frames)
+
+All 419 server tests + 142 web tests pass; ruff + mypy --strict clean.
+
+**Sync:** commit `8bcb158..(slice-16)` — will push next.
+
+**Live bring-up remaining:** the bridge pins the SBS1 ↔ NDJSON
+contract; a real dump1090 binary will need verification on:
+(a) the exact SBS1 message_type values dumped for DF=11 / DF=17
+    (we synthesize df=17 for ADS-B type 1-4, df=20 for surface pos
+    type 5),
+(b) the field population pattern (some forks leave fields like
+    groundspeed/track empty in MSG type 3 — the parser tolerates
+    that via "absent if not parseable"),
+(c) the behavior on a real SBS1 socket close mid-stream (the reader
+    thread's recv loop returns 0 bytes and exits; main loop notices
+    child poll()).
