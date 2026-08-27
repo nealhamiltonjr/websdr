@@ -119,12 +119,12 @@ openwebrx-plus/
 2. **CI caching** — persist `/usr/local/lib/libcsdr.so*` across runs using `actions/cache@v4` keyed on the csdr git HEAD sha; saves ~60-90s per backend CI run.
 3. **`@typescript-eslint` unified package** — migrate from the legacy `@typescript-eslint/eslint-plugin` + `@typescript-eslint/parser` pair to the modern `typescript-eslint` combined package (smaller install, simpler flat config).
 4. **AIS decoder + map visualizations** — `AircraftMapViz`/`AisMapViz` on MapLibre (Pillar 4 "VRS-killer" story); the AIS demod can now drop onto the subprocess PluginRunner (argv+manifest only) or the in-process pattern; needs a map tile strategy.
-2. **dump978 UAT** — second ADS-B decoder; the runner ships, this is argv+manifest+viz wiring.
-3. **S-Meter / freq-counter linked readout** — join the cursor channel (slice-4.6 pattern is in place).
-4. **Runtime-gain gaps** — soapy/airspy/sdrplay/kiwi currently spawn-time-only (rtl_tcp + USB rtl-sdr + digital file/sim + spyserver wire are done).
-5. **Popout crosshair sync** — broadcast CursorState via SharedWorker (design noted in slice-4.6).
-6. **SpyServer polish** — live bring-up verification of protocol literals; runtime tune forwarding (currently offset-demod like other IQ sources).
-7. **dump1090 real-binary bring-up** — stock builds speak SBS1-on-TCP, not stdout NDJSON: ship a thin SBS1→NDJSON wrapper (or target readsb) and verify on live 1090 MHz traffic; the fake pins the contract.
+5. **dump978 UAT** — second ADS-B decoder; the runner ships, this is argv+manifest+viz wiring.
+6. **S-Meter / freq-counter linked readout** — join the cursor channel (slice-4.6 pattern is in place).
+7. **Runtime-gain gaps** — soapy/airspy/sdrplay/kiwi currently spawn-time-only (rtl_tcp + USB rtl-sdr + digital file/sim + spyserver wire are done).
+8. **Popout crosshair sync** — broadcast CursorState via SharedWorker (design noted in slice-4.6).
+9. **SpyServer polish** — live bring-up verification of protocol literals; runtime tune forwarding (currently offset-demod like other IQ sources).
+10. **dump1090 real-binary bring-up** — stock builds speak SBS1-on-TCP, not stdout NDJSON: ship a thin SBS1→NDJSON wrapper (or target readsb) and verify on live 1090 MHz traffic; the fake pins the contract.
 
 ### Mid-term
 
