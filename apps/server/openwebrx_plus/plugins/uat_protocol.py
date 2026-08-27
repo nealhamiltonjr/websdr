@@ -73,10 +73,8 @@ def crc24_uat(data: bytes) -> int:
     for byte in data:
         crc ^= byte << 16
         for _ in range(8):
-            if crc & 0x800000:
-                crc = ((crc << 1) ^ _CRC24_POLY) & 0xFFFFFF
-            else:
-                crc = (crc << 1) & 0xFFFFFF
+            # In GF(2) arithmetic, the shift+conditional-xor step.
+            crc = ((crc << 1) ^ _CRC24_POLY) & 0xFFFFFF if (crc & 0x800000) else (crc << 1) & 0xFFFFFF  # noqa: E501
     return crc
 
 

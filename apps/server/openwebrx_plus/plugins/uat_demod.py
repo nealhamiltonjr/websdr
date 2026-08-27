@@ -36,8 +36,6 @@ matters).
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from .uat_protocol import (
@@ -128,7 +126,8 @@ class UatReceiver:
         )
 
         # Adaptive noise threshold (used for RSSI / signal presence).
-        rssi_floor = max(
+        # Computed for diagnostics; not yet surfaced in frame events.
+        _ = max(
             float(np.percentile(np.abs(samples), 25)),
             10 ** (_NOISE_DB_FLOOR / 20.0),
         )

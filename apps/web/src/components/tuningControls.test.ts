@@ -20,15 +20,15 @@ describe('DSP_MODE_OPTIONS (ADR-002 surface)', () => {
     expect(DSP_MODE_OPTIONS.map((o) => o.value)).toEqual(['raw', 'classic', 'ai', 'cascade']);
   });
 
-  it('raw + classic are available; ai + cascade are gated on DeepFilterNet', () => {
+  it('all four modes are available end-to-end (slice-10 flipped the gate)', () => {
     const byValue = Object.fromEntries(DSP_MODE_OPTIONS.map((o) => [o.value, o]));
     expect(byValue.raw.available).toBe(true);
     expect(byValue.classic.available).toBe(true);
-    expect(byValue.ai.available).toBe(false);
-    expect(byValue.cascade.available).toBe(false);
-    // The disabled options must explain WHY (shown as the tooltip).
-    expect(byValue.ai.hint).toMatch(/DeepFilterNet/);
-    expect(byValue.cascade.hint).toMatch(/ADR-002/);
+    expect(byValue.ai.available).toBe(true);
+    expect(byValue.cascade.available).toBe(true);
+    // The ai/cascade hints must explain what they do (Stage 2a denoiser).
+    expect(byValue.ai.hint).toMatch(/AI denoiser/);
+    expect(byValue.cascade.hint).toMatch(/cascade/);
   });
 });
 

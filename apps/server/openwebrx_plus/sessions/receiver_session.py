@@ -39,7 +39,7 @@ import numpy as np
 import structlog
 
 from ..config import Settings
-from ..dsp import AudioChain, DSPParams, FftChain, IQPreprocessor
+from ..dsp import AIDenoiser, AIDenoiserConfig, AudioChain, DSPParams, FftChain, IQPreprocessor
 from ..plugins.base import (
     DecoderAlreadyAttached,
     DecoderAttachContext,
@@ -76,11 +76,12 @@ AUDIO_PACK_FMT = "<IIII"  # magic version sampleRate frameCount
 AUDIO_SAMPLE_RATE = 8000  # Hz, mono Int16 PCM
 
 # ADR-002 DSP+AI cascade — the four-mode control surface. raw + classic are
-# LIVE (AudioChain conditioning topology, slice-4.7); ai + cascade require
-# the server-side DeepFilterNet module (packages/ai-rust — not built yet),
-# so set_dsp_mode() rejects them until AI_DSP_MODES_AVAILABLE flips true.
+# LIVE (AudioChain conditioning topology, slice-4.7); ai + cascade now run
+# the in-process AIDenoiser (Stage 2a, slice-10 — a real spectral-
+# subtraction noise reducer that ships before DeepFilterNet). The gate
+# `AI_DSP_MODES_AVAILABLE` was flipped to True in slice-10.
 DSP_MODES = ("raw", "classic", "ai", "cascade")
-AI_DSP_MODES_AVAILABLE = False
+AI_DSP_MODES_AVAILABLE = True
 
 
 def _gain_range_of(source_type: str) -> tuple[float, float] | None:
@@ -136,6 +137,10 @@ class ReceiverSession:
     # raw complex64 chunks from the hub BEFORE they're fed to the
     # pycsdr chains (so both FFT + audio see the cleaned IQ).
     _iq_preprocessor: IQPreprocessor | None = field(default=None, init=False)
+    # Slice-10: AI denoiser (Stage 2a of ADR-002 cascade). Instantiated
+    # lazily when dsp_mode is first set to 'ai' or 'cascade'; reset on
+    # mode/source change so the noise-floor estimate starts fresh.
+    _ai_denoiser: AIDenoiser | None = field(default=None, init=False)
     _hub: IqHub | None = field(default=None, init=False)
     _decoders: dict[str, _DecoderAttachment] = field(default_factory=dict, init=False)
     # Serializes chain swaps (set_mode / set_dsp_mode / stop) against the
@@ -204,13 +209,19 @@ class ReceiverSession:
         self._stream_task = asyncio.create_task(self._run())
 
     def _build_audio_chain(self) -> AudioChain:
-        """Construct an AudioChain for the CURRENT mode + dsp_mode + dsp_params."""
+        """Construct an AudioChain for the CURRENT mode + dsp_mode + dsp_params.
+
+        Conditioning (DcBlock / WfmDeemphasis / Limit) is ON for:
+          - classic: the standard analog-audio path (ADR-002 mode matrix).
+          - cascade: classic + AI — the WDSP stages run, then AI denoises.
+        It's OFF for raw (no processing) and ai (denoiser only, no conditioning).
+        """
         return AudioChain(
             mode=self.mode,  # type: ignore[arg-type]
             input_rate=self.sample_rate,
             output_rate=AUDIO_SAMPLE_RATE,
             channel_offset_hz=0.0,
-            conditioning=(self.dsp_mode == "classic"),
+            conditioning=(self.dsp_mode in ("classic", "cascade")),
             dsp_params=self.dsp_params,
         )
 
@@ -234,6 +245,9 @@ class ReceiverSession:
         # Slice-7: the IQ preprocessor holds no external resources (it's
         # pure numpy state) — drop the reference so GC can reclaim it.
         self._iq_preprocessor = None
+        # Slice-10: the AI denoiser is pure-numpy too — drop it so a
+        # re-adopted receiver starts with a fresh noise-floor estimate.
+        self._ai_denoiser = None
         # Destroying the hub stops the source once and sentinel-ends every
         # VFO tap sharing it (the hub owns the source lifecycle now).
         # Display-stream sessions never create a hub; destroy_hub is a no-op
@@ -409,7 +423,22 @@ class ReceiverSession:
                     if self._audio_chain is not None:
                         self._audio_chain.feed(iq_bytes)
                         for audio_frame in self._audio_chain.drain():
-                            await self._broadcast(self._pack_audio_frame(audio_frame.pcm))
+                            # Type widening so we can reassign to a numpy
+                            # array when the AI denoiser runs (slice-10).
+                            pcm: memoryview | np.ndarray = audio_frame.pcm
+                            # ADR-002 Stage 2a — apply the in-process AI
+                            # denoiser when dsp_mode is 'ai' or 'cascade'.
+                            # 'cascade' has already passed through the
+                            # classic conditioning path (DcBlock / Limit
+                            # / WfmDeemphasis) before this point.
+                            if self._ai_denoiser is not None and self.dsp_mode in ("ai", "cascade"):
+                                # Convert memoryview → int16 ndarray for the denoiser.
+                                if isinstance(pcm, memoryview):
+                                    arr = np.frombuffer(pcm, dtype="<i2").copy()
+                                else:
+                                    arr = np.asarray(pcm, dtype="<i2").copy()
+                                pcm = self._ai_denoiser.feed(arr)
+                            await self._broadcast(self._pack_audio_frame(pcm))
         except Exception as exc:
             log.exception("receiver stream error", receiver_id=self.receiver_id, error=str(exc))
 
@@ -530,14 +559,14 @@ class ReceiverSession:
         raw  → demodulator output unconditioned (no DC block, no WFM
                de-emphasis, no limiter).
         classic → conditioned audio (the default chain).
-        ai / cascade → rejected until the DeepFilterNet module ships
-               (AI_DSP_MODES_AVAILABLE).
+        ai → demodulator output unconditioned + AIDenoiser (Stage 2a).
+        cascade → classic conditioning + AIDenoiser (Stage 2a).
         """
         if mode not in DSP_MODES:
             return False, f"unknown DSP mode {mode!r}; valid: {list(DSP_MODES)}"
         if mode in ("ai", "cascade") and not AI_DSP_MODES_AVAILABLE:
             return False, (
-                f"DSP mode {mode!r} requires the DeepFilterNet AI module "
+                f"DSP mode {mode!r} requires the AI denoiser "
                 "(ADR-002) which is not built yet — use 'raw' or 'classic'"
             )
         if hasattr(self.source, "display_stream"):
@@ -550,6 +579,23 @@ class ReceiverSession:
                 new=mode,
             )
             self.dsp_mode = mode
+            # Slice-10: spin up or reset the AI denoiser when entering/
+            # leaving an AI mode. The denoiser is a streaming filter
+            # with inter-frame state — a fresh start on mode switch
+            # avoids the noise-floor estimate carrying stale samples.
+            if mode in ("ai", "cascade"):
+                if self._ai_denoiser is None:
+                    self._ai_denoiser = AIDenoiser(
+                        config=AIDenoiserConfig(sample_rate=AUDIO_SAMPLE_RATE)
+                    )
+                else:
+                    self._ai_denoiser.reset()
+            else:
+                # Leaving an AI mode — flush any buffered samples via
+                # drain() (preserves the last hop), then drop the denoiser
+                # so the wire path doesn't pay the spectral-overhead tax.
+                if self._ai_denoiser is not None:
+                    self._ai_denoiser = None
             await self._rebuild_audio_chain()
             return True, ""
         return True, ""

@@ -16,8 +16,8 @@ from .base import (  # noqa: F401
     DecoderPlugin,
     TapPoint,
 )
-from .dump1090 import Dump1090Plugin  # noqa: F401  (registers itself)
 from .dump978 import Dump978Plugin  # noqa: F401  (registers itself)
+from .dump1090 import Dump1090Plugin  # noqa: F401  (registers itself)
 from .registry import DecoderRegistry, decoder_registry  # noqa: F401
 from .subprocess import (  # noqa: F401
     PluginRunner,

@@ -7,8 +7,10 @@
 
 import type { DSPMode } from '@openwebrx-plus/shared-types';
 
-/** ADR-002 DSP modes — ai/cascade need the server-side DeepFilterNet module
- *  (not built yet), so they render disabled with the reason in a tooltip. */
+/** ADR-002 DSP modes — all four modes are now LIVE end-to-end (slice-10
+ *  flipped the gate). ai/cascade run the in-process AIDenoiser (Stage 2a —
+ *  a real spectral-subtraction noise reducer that ships before the
+ *  DeepFilterNet Rust module). */
 export const DSP_MODE_OPTIONS: {
   value: DSPMode;
   label: string;
@@ -30,14 +32,14 @@ export const DSP_MODE_OPTIONS: {
   {
     value: 'ai',
     label: 'ai',
-    available: false,
-    hint: 'Requires the DeepFilterNet AI module (ADR-002) — not built yet',
+    available: true,
+    hint: 'AI denoiser (Stage 2a, spectral subtraction) on the raw demod path',
   },
   {
     value: 'cascade',
     label: 'cascade',
-    available: false,
-    hint: 'Requires the DeepFilterNet AI module (ADR-002) — not built yet',
+    available: true,
+    hint: 'classic conditioning + AI denoiser (full ADR-002 cascade)',
   },
 ];
 
