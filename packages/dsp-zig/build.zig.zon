@@ -2,6 +2,14 @@
     .name = .owrx_dsp,
     .version = "0.1.0",
     .minimum_zig_version = "0.14.0",
+    // Zig 0.14 requires a `fingerprint` field at the top level of every
+    // build.zig.zon. It's a 64-bit hash of the package contents used for
+    // cache invalidation. The value Zig suggests in the error message
+    // (when the field is missing) is the correct value for this file —
+    // it's computed from name+version+minimum_zig_version+paths+
+    // dependencies (NOT the fingerprint field itself, so adding it
+    // doesn't invalidate the value).
+    .fingerprint = 0x42c9a31e2f7dc93c,
     .paths = .{
         "build.zig",
         "build.zig.zon",
