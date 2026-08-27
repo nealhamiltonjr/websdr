@@ -294,3 +294,58 @@ the AudioPlayer. The current AudioPlayer uses scheduled
 `AudioWorkletProcessor` that runs RNNoise frame-by-frame is the
 next slice. The slice-19 loader is the integration plumbing; the
 AudioWorklet swap is the actual audio-path change.
+
+---
+## slice-20 (2026-08-28): SDRangel client manifest scaffolding (ADR-006 Tier C)
+
+**Goal:** close the "SDRangel client" roadmap item. The slice-14
+STATUS.md explicitly allowed "manifest scaffolding + manifest
+registration can land without the implementation if the UI needs to
+advertise it." This slice ships exactly that.
+
+**Shipped:**
+- New source class at `apps/server/openwebrx_plus/sources/sdrangel.py`:
+  - `SDRangelSource` dataclass with full constructor validation
+    (host, port=8091 default, device_set, sample_rate, user-agent,
+    connect_timeout). `fixed_sample_rate` advertised to ReceiverSession.
+  - `spawn()` declared `async def` returning `AsyncGenerator[
+    RemoteFftFrame | RemoteAudioFrame, None]` — the body raises
+    `NotImplementedError` with an actionable message pointing
+    operators to the module docstring's implementation plan.
+  - `tune(freq_hz)` / `set_mode(mode)` — async, raise NotImplementedError.
+  - `close()` — async, no-op (nothing to clean up pre-spawn).
+  - Comprehensive module + class docstrings documenting the planned
+    REST+WS surface (device discovery → center freq set → spectrum
+    server WebSocket → RemoteFftFrame). Audio-over-WS is flagged as
+    deferred (SDRangel has no built-in audio-over-WS; needs UDP-sink).
+- New manifest entry in `apps/server/openwebrx_plus/sources/base.py`'s
+  `_BUILTIN_SOURCES` list: source_type="sdrangel", sdk="SDRangel REST
+  API v7+", default 2.4 MSPS, gain 0-49 dB, AGC supported. Description
+  clearly states "slice-20 manifest scaffold" so operators don't expect
+  a working impl.
+- Source class registered in
+  `apps/server/openwebrx_plus/sources/__init__.py` (added to __all__).
+
+**Tests:** 15 new in `apps/server/tests/test_sdrangel_driver.py`:
+  - Manifest is registered in SourceRegistry.builtin_manifests()
+  - Manifest fields match the class (source_type, sdk, gain_range,
+    factory_entrypoint, "scaffold" in description)
+  - Constructor validates: host, port, device_set, sample_rate,
+    connect_timeout (all raise ValueError on bad input)
+  - fixed_sample_rate advertised (Source contract)
+  - spawn() raises NotImplementedError with actionable message
+  - tune() raises NotImplementedError (drives coroutine via .send(None))
+  - set_mode() raises NotImplementedError
+  - close() is no-op (returns None)
+  - Default port is 8091 (SDRangel upstream default)
+  - Default sample rate is 2.4 MSPS
+  - User-Agent identifies the client honestly (ADR-006 federation etiquette)
+
+All 445 server tests + 150 web tests pass; ruff + mypy --strict + tsc + eslint clean.
+
+**Sync:** commit `24a28c5..(slice-20)` — will push next.
+
+**Future work remaining:** the actual REST+WS streaming implementation
+(device discovery → center freq set → spectrum server WS → RemoteFftFrame).
+The module docstring at `openwebrx_plus/sources/sdrangel.py` documents
+the full plan; the manifest scaffold unblocks UI advertisement today.

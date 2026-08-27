@@ -80,6 +80,7 @@ from .kiwi import KiwiSdrSource
 from .openwebrx_remote import RemoteDisplaySource, RemoteTarget, parse_openwebrx_url
 from .rtl_sdr import RtlSdrSource
 from .rtl_tcp import RtlTcpSource
+from .sdrangel import SDRangelSource
 from .sdrplay import SDRplaySource
 from .simulated import SimulatedSource
 from .soapy import SoapySource
@@ -107,6 +108,7 @@ __all__ = [
     "RemoteTarget",
     "RtlSdrSource",
     "RtlTcpSource",
+    "SDRangelSource",
     "SDRplaySource",
     "SimulatedSource",
     "SoapySource",

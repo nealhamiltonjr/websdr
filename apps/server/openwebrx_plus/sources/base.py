@@ -513,6 +513,31 @@ _BUILTIN_SOURCES: list[_BuiltinManifest] = [
             "(±20 dB scaling of the output samples)."
         ),
     ),
+    _BuiltinManifest(
+        source_type="sdrangel",
+        label="SDRangel (remote, REST+WS — manifest only)",
+        sdk="SDRangel REST API v7+",
+        hardware_required=False,  # the SDR is on the other end of the REST API
+        default_sample_rate=2_400_000,
+        sample_rate_min=250_000,
+        sample_rate_max=20_000_000,
+        gain_min=0.0,
+        gain_max=49.0,
+        bias_tee=False,
+        agc=True,
+        entrypoint="openwebrx_plus.sources.sdrangel:SDRangelSource",
+        description=(
+            "Slice-20 manifest scaffold: a remote SDRangel instance "
+            "controlled via its REST + WebSocket API (ADR-006 Tier C). "
+            "Registered so the UI can advertise SDRangel support; the "
+            "REST+WS streaming path raises NotImplementedError today "
+            "and lands in a future slice. Operators who want SDRangel "
+            "now can run a local instance and connect via its own web "
+            "UI. See openwebrx_plus/sources/sdrangel.py module docstring "
+            "for the implementation plan (device discovery → center "
+            "freq set → spectrum server WS → RemoteFftFrame)."
+        ),
+    ),
 ]
 
 
