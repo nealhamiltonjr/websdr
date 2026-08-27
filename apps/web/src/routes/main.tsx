@@ -18,6 +18,8 @@ import { createSignal, onMount, onCleanup, Show, For } from 'solid-js';
 import { WorkspaceManager } from '../components/WorkspaceManager';
 import { TuningBar } from '../components/TuningBar';
 import { AddReceiverModal, type Section } from '../components/AddReceiverModal';
+import { SettingsPanel } from '../components/SettingsPanel';
+import { DebugPanel } from '../components/DebugPanel';
 import { receiverRegistry, parseFFTFrame, parseAudioFrame } from '../sessions/ReceiverSession';
 import { registerTuneHandler } from '../sessions/tuneBus';
 import {
@@ -57,6 +59,10 @@ function useSharedWorker() {
   });
   const openModal = (section: Section = 'quick') => setModal({ open: true, section });
   const closeModal = () => setModal({ open: false, section: 'quick' });
+
+  // Slice-5.1: Settings + Debugger panel visibility.
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [debugOpen, setDebugOpen] = createSignal(false);
 
   onMount(() => {
     const worker = new SharedWorker(
@@ -312,6 +318,10 @@ function useSharedWorker() {
     closeModal,
     adoptSpawned,
     removeReceiver,
+    settingsOpen,
+    setSettingsOpen,
+    debugOpen,
+    setDebugOpen,
   };
 }
 
@@ -330,14 +340,22 @@ export function MainRoute() {
     closeModal,
     adoptSpawned,
     removeReceiver,
+    settingsOpen,
+    setSettingsOpen,
+    debugOpen,
+    setDebugOpen,
   } = useSharedWorker();
 
   // Active receiver's tuning — what the TuningBar shows/edits.
   const active = () => activeTuning(tuning());
 
-  // Escape closes the modal.
+  // Escape closes whichever modal is open (settings > debug > source picker).
   const onKeydown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+      if (settingsOpen()) setSettingsOpen(false);
+      else if (debugOpen()) setDebugOpen(false);
+      else closeModal();
+    }
   };
   onMount(() => window.addEventListener('keydown', onKeydown));
   onCleanup(() => window.removeEventListener('keydown', onKeydown));
@@ -348,7 +366,7 @@ export function MainRoute() {
       <header class="flex h-10 items-center justify-between border-b border-base-800 px-4">
         <div class="flex items-center gap-2">
           <span class="font-mono text-sm font-bold text-cyan-450">OpenWebRX+</span>
-          <span class="font-mono text-xs text-base-400">v0.1.0-slice4.7</span>
+          <span class="font-mono text-xs text-base-400">v0.1.0-slice5.1</span>
         </div>
         <div class="flex items-center gap-3">
           {/* Spawn-receiver button — opens the source picker */}
@@ -359,6 +377,24 @@ export function MainRoute() {
             title="Add a receiver — local hardware, IQ file, remote receiver, or VFO"
           >
             + receiver
+          </button>
+          {/* Slice-5.1: Settings button */}
+          <button
+            type="button"
+            class="rounded bg-base-800 px-2 py-0.5 font-mono text-xs text-base-200 hover:bg-base-700"
+            onClick={() => setSettingsOpen(true)}
+            title="Open the Settings panel — display, audio, DSP, sources, decoders, debug"
+          >
+            ⚙ settings
+          </button>
+          {/* Slice-5.1: Debugger button */}
+          <button
+            type="button"
+            class="rounded bg-base-800 px-2 py-0.5 font-mono text-xs text-base-200 hover:bg-base-700"
+            onClick={() => setDebugOpen(true)}
+            title="Open the Debugger — captured logs + errors, with filters + export"
+          >
+            🐛 debug
           </button>
           {/* Audio toggle */}
           <button
@@ -464,6 +500,16 @@ export function MainRoute() {
           onSpawned={adoptSpawned}
           initialSection={modal().section}
         />
+      </Show>
+
+      {/* Slice-5.1: Settings panel */}
+      <Show when={settingsOpen()}>
+        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      </Show>
+
+      {/* Slice-5.1: Debugger panel */}
+      <Show when={debugOpen()}>
+        <DebugPanel onClose={() => setDebugOpen(false)} />
       </Show>
     </div>
   );

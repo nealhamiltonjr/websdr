@@ -117,6 +117,97 @@ export interface SpawnReceiverResponse {
   mode: string;
 }
 
+// ---- User settings + Debug log types (slice-5.1) ---------------------------
+
+export interface DisplaySettings {
+  theme: 'dark' | 'light' | 'system';
+  waterfall_colormap: 'viridis' | 'turbo' | 'jet' | 'grayscale';
+  spectrum_show_peak_hold: boolean;
+  spectrum_averaging: 'none' | 'linear' | 'exponential';
+  spectrum_decay_alpha: number;
+  freq_display_unit: 'hz' | 'khz' | 'mhz';
+  show_passband_overlay: boolean;
+}
+
+export interface AudioSettings {
+  master_volume: number;
+  preferred_output_device: string;
+  default_squelch_db: number;
+  force_mono: boolean;
+}
+
+export interface DSPUserSettings {
+  default_dsp_mode: 'raw' | 'classic';
+  default_agc_enabled: boolean;
+  default_low_cut_hz: number | null;
+  default_high_cut_hz: number | null;
+  default_notch_enabled: boolean;
+  default_notch_freq_hz: number;
+  default_notch_q: number;
+  default_noise_blanker_enabled: boolean;
+  default_noise_blanker_threshold: number;
+}
+
+export interface SourcesSettings {
+  default_source_type: string;
+  default_sample_rate: number;
+  default_center_freq: number;
+}
+
+export interface DecoderSettings {
+  auto_attach_adsb: boolean;
+  auto_attach_ais: boolean;
+  auto_attach_dump978: boolean;
+}
+
+export interface DebugSettings {
+  log_capture_enabled: boolean;
+  log_ring_capacity: number;
+  error_ring_capacity: number;
+  capture_async_exceptions: boolean;
+  capture_unhandled_exceptions: boolean;
+}
+
+export interface UserSettings {
+  display: DisplaySettings;
+  audio: AudioSettings;
+  dsp: DSPUserSettings;
+  sources: SourcesSettings;
+  decoders: DecoderSettings;
+  debug: DebugSettings;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  logger: string;
+  message: string;
+  fields: Record<string, unknown>;
+}
+
+export interface DebugLogStats {
+  counts_by_level: Record<string, number>;
+  total_captured: number;
+  total_dropped: number;
+  all_capacity: number;
+  errors_capacity: number;
+  all_current: number;
+  errors_current: number;
+}
+
+export interface DebugLogResponse {
+  entries: LogEntry[];
+  count: number;
+  stats: DebugLogStats;
+  filters?: {
+    level?: string;
+    logger?: string;
+    message?: string;
+    limit: number;
+    offset: number;
+  };
+}
+
 // ---- Client ----------------------------------------------------------------
 
 /** Normalized REST failure — carries the server's detail message when present. */
@@ -195,6 +286,66 @@ export const api = {
     request<void>(`/api/receivers/${encodeURIComponent(receiverId)}`, {
       method: 'DELETE',
     }),
+
+  // ---- Settings + Debugger (slice-5.1) ------------------------------------
+
+  /** Get the current user settings (with persistence to TOML on the server). */
+  getUserSettings: () => request<UserSettings>('/api/settings'),
+
+  /** Partial-update user settings. Only sections present in the patch are
+   *  mutated. Unknown sections/fields are ignored server-side. */
+  updateUserSettings: (patch: Partial<UserSettings>) =>
+    request<UserSettings>('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+
+  /** Reset user settings to defaults. */
+  resetUserSettings: () =>
+    request<UserSettings>('/api/settings/reset', { method: 'POST' }),
+
+  /** Recent log entries (newest-first). Filter by level/logger/message substrings. */
+  getDebugLogs: (params: {
+    level?: string;
+    logger?: string;
+    message?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.level) qs.set('level', params.level);
+    if (params.logger) qs.set('logger', params.logger);
+    if (params.message) qs.set('message', params.message);
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.offset) qs.set('offset', String(params.offset));
+    const query = qs.toString();
+    return request<DebugLogResponse>(
+      `/api/debug/logs${query ? `?${query}` : ''}`,
+    );
+  },
+
+  /** Recent warnings+errors (newest-first). */
+  getDebugErrors: (limit = 100, offset = 0) =>
+    request<DebugLogResponse>(
+      `/api/debug/errors?limit=${limit}&offset=${offset}`,
+    ),
+
+  /** Counts by level + buffer capacities. */
+  getDebugStats: () => request<DebugLogStats>('/api/debug/stats'),
+
+  /** Drop all entries from the ring buffer. */
+  clearDebugLogs: () =>
+    request<{ status: string }>('/api/debug/clear', { method: 'POST' }),
+
+  /** Export all entries as newline-delimited JSON. Returns a Blob so the
+   *  caller can trigger a download. */
+  exportDebugLogs: async (): Promise<Blob> => {
+    const res = await fetch('/api/debug/export');
+    if (!res.ok) {
+      throw new ApiError(res.status, res.statusText);
+    }
+    return res.blob();
+  },
 };
 
 // ---- Deep-link parsing (client side of ADR-006) ----------------------------

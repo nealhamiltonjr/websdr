@@ -1,6 +1,6 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-27, after slice-4.9 (subprocess PluginRunner + dump1090)
+**Updated:** 2026-08-27, after slice-5.1 (Settings & Debugger infrastructure)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
 **Companion:** `ADR/` for decision records; `docs/slice-01-plan.md` for the original slice plan (kept for history).
 
@@ -14,16 +14,17 @@ The platform is a working, hardware-free, end-to-end SDR receiver: 11 source bac
 
 | Gate | Result |
 |---|---|
-| Server tests (`scripts/run-server-tests.sh`) | **229/229 pass**, 82% coverage, ~70 s |
-| `mypy --strict` (40 files) | **clean** |
+| Server tests (`scripts/run-server-tests.sh`) | **279/279 pass**, 84% coverage, ~66 s |
+| `mypy --strict` (43 files) | **clean** |
 | `ruff check` | **clean** |
 | Web `vitest` | **95/95 pass** (8 files) |
 | Web `tsc --noEmit` | **clean** |
 | `vite build` | clean (this session) |
 
-- Codebase size: **~14.6 k lines** Python (server + tests, 20 test files) · **~7.4 k lines** TS/TSX (web).
+- Codebase size: **~15.8 k lines** Python (server + tests, 23 test files) · **~8.6 k lines** TS/TSX (web).
 - Registered sources: **11** (`rtl_sdr`, `rtl_tcp`, `airspy`, `sdrplay`, `soapy`, `kiwi`, `spyserver`, `openwebrx_remote`, `vfo`, `file`, `simulated`). Decoder plugins: **2** (`adsb` in-process, `dump1090` subprocess) — both feed the same aircraft-table viz.
 - ADRs accepted: **6** (001 workspace, 002 DSP+AI cascade, 003 decoders, 004 pycsdr/sources, 005 VFO, 006 federation).
+- In-app panels (slice-5.1): **Settings** (display/audio/DSP/sources/decoders/debug sections, persisted to TOML) + **Debugger** (live log ring buffer + error capture + filters + export + auto-refresh).
 
 ## Codebase map
 
@@ -90,6 +91,8 @@ openwebrx-plus/
 | 4.7 | Per-receiver gain + DSP mode controls de-stubbed; runtime-gain protocol (digital / rtl_tcp wire / USB handle); setMode-never-rebuilds bug fixed |
 | 4.8 | SpyServer client (ADR-006 Tier A): TCP protocol v2 (20-byte `<IIQI` frames), HELLO/SERVER_INFO handshake, float32 IQ at power-of-two decimation with an exact-rate contract, runtime gain via COMMAND_SET_IQ_GAIN, protocol-faithful fake server in tests |
 | 4.9 | Subprocess PluginRunner + dump1090 (ADR-003 family #2): stdin IQ (cf32/cs16/cu8 bridge conversion), stdout NDJSON with ready handshake, bounded crash-restart → `decoder_state` events, metered backpressure (`dropped_chunks`), deterministic teardown (stdin-EOF → wait → SIGKILL); dump1090 plugin with env-configurable binary; protocol-faithful fake binary (real demod + synthetic positions); ADSB_DECODERS family in shared-types + aircraft viz position column & lifecycle banner |
+| 5.0 | Foundation: AGENTS.md (AI operating instructions), LICENSE stub (AGPL-3.0 placeholder pointing at canonical source), sync-up cadence doc (`SYNC-UP.md`), portable `scripts/run-server-tests.sh`, fix to `.github/workflows/ci.yml` pnpm cache-dependency-path (was wrong, breaking CI caching) |
+| 5.1 | Settings & Debugger infrastructure (backend + frontend): `observability/debug_log.py` ring buffer (`DebugLogRingBuffer`, `LogEntry`, structlog capture processor, asyncio loop + threading excepthook capture); `config/user_settings.py` TOML-persisted runtime-mutable user preferences (`DisplaySettings`, `AudioSettings`, `DSPSettings`, `SourcesSettings`, `DecoderSettings`, `DebugSettings`); `api/settings_debug.py` REST endpoints (`GET/PUT/POST /api/settings`, `GET /api/debug/{logs,errors,stats,export}`, `POST /api/debug/clear`); frontend `SettingsPanel.tsx` (six-section modal with optimistic updates + debounced PUT) + `DebugPanel.tsx` (logs/errors views + filters + pagination + auto-refresh + NDJSON export); wired into main route header (gear + bug buttons); E2E tests boot real uvicorn + httpx to validate full HTTP/middleware stack |
 
 ## What works end-to-end today
 

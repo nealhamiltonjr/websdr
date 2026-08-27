@@ -19,6 +19,9 @@ dependencies = [
     # Config
     "pydantic>=2.9.2",
     "pydantic-settings>=2.6.0",
+    # TOML writer for the user-settings persistence (slice-5.1).
+    # tomllib (stdlib) reads; tomli_w writes. We need both for round-trip.
+    "tomli_w>=1.0.0",
     # Numerics / DSP glue
     "numpy>=2.1.3",
     # Observability

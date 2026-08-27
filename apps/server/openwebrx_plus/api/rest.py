@@ -43,6 +43,7 @@ from ..sessions import (
 from ..sessions.registry import VfoValidationError
 from ..sources import SourceRegistry
 from ..sources.directory import DirectoryUnavailable, directory_service
+from .settings_debug import register_settings_and_debug_routes
 
 log = structlog.get_logger(__name__)
 
@@ -152,12 +153,36 @@ def create_app(settings: Settings) -> FastAPI:
     # frontend uses to list available receivers) see the session immediately.
     init_default_sessions(settings)
 
+    # Wire the in-app Settings + Debugger endpoints (slice-5.1).
+    register_settings_and_debug_routes(app)
+
     @app.on_event("startup")
     async def _startup() -> None:
         # Belt-and-suspenders: also init on startup in case create_app was
         # called before the settings were final.
         init_default_sessions(settings)
         log.info("default sessions initialized", count=len(list_sessions()))
+        # Hook the async-loop + threading excepthooks so crashes land in
+        # the debug ring buffer (slice-5.1). Guarded by user settings so
+        # the user can disable capture if it becomes noisy.
+        import asyncio as _asyncio
+        import sys as _sys
+
+        from ..config.user_settings import get_user_settings_service
+        from ..observability import (
+            capture_async_exception,
+            capture_unhandled_exception,
+        )
+
+        debug_settings = get_user_settings_service().get().debug
+        if debug_settings.capture_async_exceptions:
+            # We're inside an async startup handler, so a loop is running.
+            # get_running_loop() is the Python 3.12+ API (get_event_loop
+            # is deprecated).
+            loop = _asyncio.get_running_loop()
+            loop.set_exception_handler(capture_async_exception)
+        if debug_settings.capture_unhandled_exceptions:
+            _sys.excepthook = capture_unhandled_exception
 
     # CORS — allow the Vite dev server (port 5173) to call us.
     if settings.tier == "dev":
