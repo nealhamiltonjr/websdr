@@ -36,9 +36,11 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{
         .root_module = lib_mod,
     });
+    // Zig 0.14: addRunArtifact returns *Build.Step.Run, not *Build.Step.
+    // To pass it to dependOn (which wants *Build.Step), access .step.
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_tests);
+    test_step.dependOn(&run_tests.step);
 
     // --- FFI exports: ensure C ABI symbols exist (stub) -----------------
     // Real WDSP/RNNoise wrappers are in src/wrappers/*.zig
