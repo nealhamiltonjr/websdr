@@ -1,0 +1,31 @@
+{
+  "global": {
+    "core:datatype": "cf32",
+    "core:sample_rate": 250000,
+    "core:version": "1.0.0",
+    "core:description": "OpenWebRX+ dev fixture (synthetic, deterministic)"
+  },
+  "captures": [
+    {
+      "core:sample_start": 0,
+      "core:frequency": 100000000
+    }
+  ],
+  "annotations": [
+    {
+      "core:freq_start": 99962500.0,
+      "core:freq_end": 99962500.0,
+      "core:label": "CW -37.5 kHz"
+    },
+    {
+      "core:freq_start": 100001200.0,
+      "core:freq_end": 100001200.0,
+      "core:label": "CW +1.2 kHz"
+    },
+    {
+      "core:freq_start": 100012500.0,
+      "core:freq_end": 100012500.0,
+      "core:label": "CW +12.5 kHz"
+    }
+  ]
+}

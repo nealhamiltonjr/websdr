@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ----- Frontend (pnpm) -----
+  web:
+    name: Frontend (apps/web)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: ${{ github.workspace }}
+      - run: pnpm run typecheck
+      - run: pnpm run lint
+      - run: pnpm run test
+      - run: pnpm run build
+
+  # ----- Backend (uv + Python) -----
+  server:
+    name: Backend (apps/server)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run mypy openwebrx_plus
+      - run: uv run pytest
+
+  # ----- Zig DSP -----
+  dsp-zig:
+    name: DSP (packages/dsp-zig)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/dsp-zig
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: '0.13.0'
+      - run: zig build
+      - run: zig build test
+
+  # ----- Rust AI -----
+  ai-rust:
+    name: AI (packages/ai-rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/ai-rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check
+      - run: cargo test
+
+  # ----- Shared types (TypeScript) -----
+  shared-types:
+    name: Shared Types (packages/shared-types)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/shared-types
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --frozen-lockfile
+        working-directory: ${{ github.workspace }}
+      - run: pnpm run typecheck

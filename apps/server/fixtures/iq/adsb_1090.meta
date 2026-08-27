@@ -1,0 +1,21 @@
+{
+  "global": {
+    "core:datatype": "cf32",
+    "core:sample_rate": 2000000,
+    "core:version": "1.0.0",
+    "core:description": "OpenWebRX+ dev fixture (synthetic, deterministic)"
+  },
+  "captures": [
+    {
+      "core:sample_start": 0,
+      "core:frequency": 1090000000
+    }
+  ],
+  "annotations": [
+    {
+      "core:freq_start": 1090000000,
+      "core:freq_end": 1090000000,
+      "core:label": "Mode S 1090 MHz \u2014 14 CRC-valid frames, 3 aircraft"
+    }
+  ]
+}

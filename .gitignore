@@ -1,0 +1,50 @@
+# --- Node / pnpm ---
+node_modules/
+.pnpm-store/
+dist/
+build/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Rust ---
+target/
+**/*.rs.bk
+
+# --- Zig ---
+zig-out/
+.zig-cache/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- SDR runtime artifacts ---
+*.raw
+*.wav
+*.aac
+recordings/
+capture/
+
+# --- Local config / secrets ---
+.env
+.env.local
+.env.*.local
+config/local.toml
+secrets.toml

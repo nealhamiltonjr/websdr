@@ -1,0 +1,120 @@
+@import 'tailwindcss';
+
+/* Tailwind 4 theme tokens (CSS-first config).
+   Color system: "editorial dark" — deep charcoal background, warm amber accent
+   for active tuning indicator, cool cyan for spectrum traces. */
+
+@theme {
+  /* Backgrounds (deep charcoal) */
+  --color-base-950: #07090d;
+  --color-base-900: #0a0c10;
+  --color-base-850: #0e1218;
+  --color-base-800: #131820;
+  --color-base-700: #1b2230;
+  --color-base-600: #2a3342;
+
+  /* Foregrounds (warm off-white) */
+  --color-base-100: #e7e9ee;
+  --color-base-200: #c7ccd6;
+  --color-base-300: #8b95a8;
+  --color-base-400: #5c6678;
+
+  /* Accents */
+  --color-amber-450: #f59e0b;  /* active tuning indicator */
+  --color-cyan-450: #22d3ee;   /* spectrum trace */
+  --color-rose-450: #f43f5e;   /* alert / clip */
+
+  /* Type system: Inter for UI, JetBrains Mono for frequencies and metrics */
+  --font-sans: 'Inter', 'system-ui', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background-color: var(--color-base-900);
+  color: var(--color-base-100);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv11', 'ss01';
+}
+
+/* Dock layout root needs explicit height */
+.dockview-container {
+  height: 100%;
+  width: 100%;
+  background: var(--color-base-950);
+}
+
+/* Canvas-based visualizations fill their parent */
+canvas.viz-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;  /* crisp waterfall pixels */
+}
+
+/* ─── Dockview workspace theming (slice-4, ADR-001 § Layer 3) ────────
+   The structural stylesheet (dockview-core/dist/styles/dockview.css) is
+   imported from src/main.tsx. On top of the .dockview-theme-abyss palette
+   we retune the theme variables to the editorial-dark tokens and set the
+   mono typography for tabs. Scoped to .owrx-dockview so the popout route
+   (which hosts no dockview) is unaffected. */
+
+.owrx-dockview.dockview-theme-abyss {
+  /* palette remap: abyss → editorial dark */
+  --dv-color-abyss-dark: var(--color-base-950);        /* group content bg */
+  --dv-color-abyss: var(--color-base-850);
+  --dv-color-abyss-light: var(--color-base-850);       /* tab strip bg */
+  --dv-color-abyss-lighter: var(--color-base-700);     /* dividers */
+  --dv-color-abyss-primary-text: var(--color-base-100);
+  --dv-color-abyss-secondary-text: var(--color-base-400);
+
+  /* tabs: active group's visible tab = amber accent */
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-base-800);
+  --dv-activegroup-visiblepanel-tab-color: var(--color-amber-450);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-base-400);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-base-300);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-base-400);
+  --dv-tab-divider-color: var(--color-base-700);
+
+  /* chrome metrics — compact, mono, matches the app's 11px status bars */
+  --dv-tabs-and-actions-container-height: 28px;
+  --dv-tabs-and-actions-container-font-size: 11px;
+  --dv-tab-font-size: 11px;
+  --dv-icon-hover-background-color: var(--color-base-700);
+  --dv-icon-size: 14px;
+
+  /* splitters: near-invisible at rest, cyan when grabbed */
+  --dv-sash-color: var(--color-base-800);
+  --dv-active-sash-color: var(--color-cyan-450);
+  --dv-active-sash-transition-duration: 0.05s;
+  --dv-active-sash-transition-delay: 0.1s;
+
+  /* drag-over feedback while rearranging */
+  --dv-drag-over-background-color: color-mix(in srgb, var(--color-cyan-450) 12%, transparent);
+  --dv-drag-over-border-color: var(--color-cyan-450);
+
+  --dv-group-view-background-color: var(--color-base-900);
+  --dv-group-gap-size: 1px;
+  --dv-border-radius: 0px;
+}
+
+.owrx-dockview .dv-default-tab-content,
+.owrx-dockview .dv-default-header .dv-default-tab-content {
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+/* Panel content hosts (our viz components) must not introduce scrollbars —
+   the canvases are sized to fill exactly. */
+.owrx-dockview .dv-solid-part {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Drop the watermark inside empty workspaces on the base background */
+.owrx-dockview .dv-watermark-container {
+  background: var(--color-base-950);
+}

@@ -1,0 +1,56 @@
+{
+  "global": {
+    "core:datatype": "cf32",
+    "core:sample_rate": 250000,
+    "core:version": "1.0.0",
+    "core:description": "OpenWebRX+ dev fixture (synthetic, deterministic)"
+  },
+  "captures": [
+    {
+      "core:sample_start": 0,
+      "core:frequency": 14150000
+    }
+  ],
+  "annotations": [
+    {
+      "core:freq_start": 14152100,
+      "core:freq_end": 14152100,
+      "core:label": "CW CQ caller 20 WPM"
+    },
+    {
+      "core:freq_start": 14100000,
+      "core:freq_end": 14100000,
+      "core:label": "CW beacon (14.100)"
+    },
+    {
+      "core:freq_start": 14195000,
+      "core:freq_end": 14195000,
+      "core:label": "CW drifter (old VFO)"
+    },
+    {
+      "core:freq_start": 14063000,
+      "core:freq_end": 14063000,
+      "core:label": "CW weak/faded"
+    },
+    {
+      "core:freq_start": 14074000,
+      "core:freq_end": 14074000,
+      "core:label": "FT8 trace (14.074)"
+    },
+    {
+      "core:freq_start": 14158000,
+      "core:freq_end": 14158000,
+      "core:label": "USB QSO (14.158)"
+    },
+    {
+      "core:freq_start": 14090000,
+      "core:freq_end": 14090000,
+      "core:label": "USB QSO (14.090)"
+    },
+    {
+      "core:freq_start": 14235000,
+      "core:freq_end": 14235000,
+      "core:label": "AM broadcast (14.235)"
+    }
+  ]
+}

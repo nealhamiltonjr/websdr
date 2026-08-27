@@ -1,0 +1,46 @@
+[package]
+name = "owrx-ai"
+version = "0.1.0"
+edition = "2021"
+description = "Rust AI inference for OpenWebRX+ — DeepFilterNet (Stage 2a) server-side noise reduction."
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "owrx_ai"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "owrx-ai-test"
+path = "src/bin/smoke.rs"
+
+[dependencies]
+# DeepFilterNet bindings — the canonical Rust impl.
+# We pin to the upstream release; once vendored into packages/dsp-c or
+# pulled from crates.io, uncomment.
+# deepfilter = "0.2"
+# deepfilter-lib = "0.2"
+
+# Numerics
+ndarray = "0.16"
+numpy = { version = "0.22", optional = true }  # for PyO3 bindings (slice-3)
+
+# PyO3 bindings (so the Rust AI module can be called from Python directly).
+# Slice-1 status: stub. Uncomment in slice-2 once we set up maturin.
+# pyo3 = { version = "0.22", features = ["extension-module"] }
+
+# Concurrency / async
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "sync"] }
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[features]
+default = []
+python = ["dep:numpy"]   # build with PyO3 + numpy for Python bindings
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

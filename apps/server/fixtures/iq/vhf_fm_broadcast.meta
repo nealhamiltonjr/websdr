@@ -1,0 +1,41 @@
+{
+  "global": {
+    "core:datatype": "cf32",
+    "core:sample_rate": 1000000,
+    "core:version": "1.0.0",
+    "core:description": "OpenWebRX+ dev fixture (synthetic, deterministic)"
+  },
+  "captures": [
+    {
+      "core:sample_start": 0,
+      "core:frequency": 98000000
+    }
+  ],
+  "annotations": [
+    {
+      "core:freq_start": 97520000.0,
+      "core:freq_end": 97720000.0,
+      "core:label": "97.6 stereo+RDS (strong)"
+    },
+    {
+      "core:freq_start": 97740000.0,
+      "core:freq_end": 97940000.0,
+      "core:label": "97.8 mono speech"
+    },
+    {
+      "core:freq_start": 97930000.0,
+      "core:freq_end": 98130000.0,
+      "core:label": "98.0 stereo rock"
+    },
+    {
+      "core:freq_start": 98120000.0,
+      "core:freq_end": 98320000.0,
+      "core:label": "98.2 mono music"
+    },
+    {
+      "core:freq_start": 98320000.0,
+      "core:freq_end": 98520000.0,
+      "core:label": "98.4 stereo (distant, fading)"
+    }
+  ]
+}
