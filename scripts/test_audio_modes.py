@@ -5,12 +5,19 @@ import os
 import sys
 import time
 
+# Portable path setup: resolve apps/server relative to this script so the
+# test runs anywhere without hardcoded absolute paths.
+_THIS = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_THIS, ".."))
+_SERVER_DIR = os.path.join(_REPO_ROOT, "apps", "server")
+sys.path.insert(0, _SERVER_DIR)
+
+# pycsdr needs libcsdr on the library path; honor an existing LD_LIBRARY_PATH
+# if the caller has already set one.
 os.environ.setdefault(
     "LD_LIBRARY_PATH",
-    "/home/z/.local/usr/lib/x86_64-linux-gnu:/home/z/.local/usr/lib",
+    os.path.expanduser("~/.local/usr/lib/x86_64-linux-gnu") + ":" + os.path.expanduser("~/.local/usr/lib"),
 )
-
-sys.path.insert(0, "/home/z/my-project/openwebrx-plus/apps/server")
 
 import numpy as np
 

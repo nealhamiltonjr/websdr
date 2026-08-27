@@ -72,4 +72,11 @@ See `ARCHITECTURE.md` for the high-level overview and `ADR/` for decision record
 
 ## License
 
-Inherits upstream OpenWebRX+ license (AGPL-3.0-or-later). See `LICENSE` once vendored.
+This project is licensed under the GNU Affero General Public License v3.0 or
+later (`AGPL-3.0-or-later`), inheriting the license of upstream
+[OpenWebRX+](https://github.com/0xAF/openwebrxplus). A `LICENSE` file containing
+the full AGPL-3.0 text should be added at the repo root; until then, the full
+license text is available at <https://www.gnu.org/licenses/agpl-3.0.txt>.
+
+External contributions are welcome — see `docs/AI-HANDOFF.md` for orientation
+and `docs/STATUS.md` for the current development snapshot.

@@ -29,7 +29,7 @@ dpkg-deb -x libsamplerate0_*.deb ~/.local
 dpkg-deb -x libsamplerate0-dev_*.deb ~/.local
 
 # Fix the .pc prefix so pkg-config reports the user-prefix paths:
-sed -i 's|^prefix=/usr$|prefix=/home/z/.local/usr|' \
+sed -i "s|^prefix=/usr$|prefix=$HOME/.local/usr|" \
     ~/.local/usr/lib/x86_64-linux-gnu/pkgconfig/samplerate.pc
 ```
 

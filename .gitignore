@@ -39,6 +39,9 @@ Thumbs.db
 *.raw
 *.wav
 *.aac
+*.cf32
+*.cs16
+*.cu8
 recordings/
 capture/
 
@@ -48,3 +51,25 @@ capture/
 .env.*.local
 config/local.toml
 secrets.toml
+
+# --- Coverage / profiling ---
+.coverage
+coverage/
+htmlcov/
+.coverage.*
+*.prof
+*.pstat
+
+# --- Python packaging ---
+*.egg-info/
+*.egg-link/
+build/
+
+# --- Editor backup files ---
+*~
+TAGS
+
+# --- pycsdr restore artifacts (see scripts/README-dsp-bootstrap.md) ---
+pycsdr-build/
+csdr-build/
+env-artifacts/

@@ -23,7 +23,8 @@ jobs:
         with:
           node-version: '22'
           cache: 'pnpm'
-          cache-dependency-path: apps/web/pnpm-lock.yaml
+          # pnpm-lock.yaml lives at the workspace root, not under apps/web.
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: ${{ github.workspace }}
       - run: pnpm run typecheck

@@ -37,7 +37,7 @@ A user should be able to:
 ### Step 1 — Verify the scaffold builds
 
 ```bash
-cd /home/z/my-project/openwebrx-plus
+# From the repo root.
 
 # Frontend
 cd apps/web && pnpm install && pnpm run typecheck

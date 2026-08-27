@@ -10,14 +10,18 @@ everything without SDR hardware.
 
 Companion documents (read in this order):
 1. **This file** — orientation + roadmap + how-to-run.
-2. `STATUS.md` (zip root) — the living status doc kept in-repo at
-   `openwebrx-plus/docs/STATUS.md`: verified health table, codebase map,
+2. `docs/STATUS.md` — the living status doc: verified health table, codebase map,
    delivery history.
-3. `worklog.md` (zip root) — the full per-slice implementation log: 16 entries,
-   every design decision and debug war story.
-4. `openwebrx-plus/ADR/` — 6 accepted Architecture Decision Records (workspace,
+3. `ADR/` — 6 accepted Architecture Decision Records (workspace,
    DSP+AI cascade, decoder plugins, pycsdr/sources, VFO wideband, federation).
-5. `openwebrx-plus/ARCHITECTURE.md` — the original pillars/vision document.
+4. `ARCHITECTURE.md` — the original pillars/vision document.
+
+> **Note:** This doc was originally written for a handoff bundle that placed
+> the project at `openwebrx-plus/` inside a parent directory with various
+> support artifacts (`scripts/pycsdr-build/`, `env-artifacts/`, `worklog.md`,
+> `CHECKSUMS-fixtures.txt`). In this standalone repo, those paths are
+> either at the repo root (`docs/`, `ADR/`, `scripts/`) or no longer
+> present — rebuild from source using `scripts/README-dsp-bootstrap.md`.
 
 ---
 
@@ -250,12 +254,12 @@ and point `OPENWEBRX_PLUS_DUMP1090_BIN` at it. The contract is pinned in
 # 0) one-time bootstrap — see §7 for the pycsdr/fixture steps first!
 
 # 1) frontend deps
-cd openwebrx-plus && pnpm install
+pnpm install
 
 # 2) backend venv + deps — VERIFIED sequence (do NOT plain-install the
 #    project: its pycsdr dependency is a git direct reference that wants
 #    to BUILD pycsdr from source, which needs libcsdr already installed —
-#    the chicken-and-egg this zip's restore artifact solves):
+#    the chicken-and-egg that scripts/README-dsp-bootstrap.md solves):
 cd apps/server
 uv venv
 uv pip install --python .venv/bin/python \
@@ -266,9 +270,9 @@ uv pip install --python .venv/bin/python \
     pytest pytest-asyncio pytest-cov anyio httpx ruff mypy
 #    then restore pycsdr per §7.1 and regenerate fixtures per §7.2
 
-# 3) run (two terminals)
-cd openwebrx-plus && make dev-server   # http://localhost:8073  (API + WS)
-cd openwebrx-plus && make dev-web      # http://localhost:5173  (binds ::1 —
+# 3) run (two terminals, both from the repo root)
+make dev-server   # http://localhost:8073  (API + WS)
+make dev-web      # http://localhost:5173  (binds ::1 —
                                        #  use "localhost", NOT 127.0.0.1)
 ```
 
@@ -316,21 +320,23 @@ From-source rebuild recipe (if you're on another arch): `scripts/README-dsp-boot
 ### 7.2 Regenerate the IQ fixtures (deterministic — this is why they're not in the zip)
 
 ```bash
-cd openwebrx-plus
+# from the repo root
 apps/server/.venv/bin/python scripts/generate_iq_fixtures.py
 # → apps/server/fixtures/iq/{hf_20m_evening,vhf_fm_broadcast,adsb_1090,smoke}.cf32 (+ .meta)
 ```
 
-Verify against `CHECKSUMS-fixtures.txt` (zip root) — regeneration is seeded and
-byte-identical (proven when this zip was built). Server tests need these files.
+Regeneration is deterministic and seeded — `sha256sum *.cf32` should match
+across runs. Server tests need these files. (The original handoff bundle
+shipped a `CHECKSUMS-fixtures.txt` for verification; if you have it, compare
+against its hashes; otherwise the deterministic generator is the source of truth.)
 
 ### 7.3 Run the full verification battery
 
 ```bash
 scripts/run-server-tests.sh                       # 229 tests, ~70 s
-cd openwebrx-plus/apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit
-cd /home/z/my-project 2>/dev/null || true         # (workspace-level scripts below)
-scripts/verify_adsb_e2e.sh                        # agent-browser E2E examples
+cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit
+# E2E verification scripts (agent-browser driven) live outside this repo —
+# they were in the original handoff bundle and can be re-imported if needed.
 ```
 
 ## 8. Landmines (read before touching anything)
@@ -377,10 +383,11 @@ production path honest.
 
 **Test entry points:**
 - Server: `scripts/run-server-tests.sh [pytest args...]` (from anywhere).
-- Web: `cd openwebrx-plus/apps/web && pnpm exec vitest run` (pure models are
+- Web: `cd apps/web && pnpm exec vitest run` (pure models are
   node-environment tests; no DOM needed).
 - Static gates: `ruff check` + `mypy openwebrx_plus` (strict) in apps/server.
-- E2E: `scripts/verify_{adsb,crosshair,dockview,gain,tuning,frontend}_e2e.sh`.
+- E2E: scripts not currently in-repo (originally `scripts/verify_{adsb,crosshair,dockview,gain,tuning,frontend}_e2e.sh`,
+  can be re-imported from the original handoff bundle if needed).
 
 ## 10. How to extend (the two recipes you'll actually need)
 
@@ -413,9 +420,11 @@ production path honest.
 
 - **Slice protocol** (§5): implement → gates green → worklog entry → STATUS.md
   update. Never leave gates red across slices.
-- **worklog.md** is append-only and lives at the workspace ROOT (outside the
-  monorepo) — in this zip it's at the zip root. Every entry: Task ID, what was
-  built, debug war stories, stage summary. It is the project's real history.
+- **worklog.md** is append-only. In the original handoff bundle it lived at
+  the workspace root (outside the monorepo); in this standalone repo, you can
+  keep a worklog anywhere you like (commonly `docs/worklog.md` or a sibling
+  `WORKLOG.md`). Every entry: Task ID, what was built, debug war stories,
+  stage summary. It is the project's real history.
 - **ADRs before architecture**: new subsystems get an `ADR/00X-*.md` first.
 - **Honest failures**: actionable error strings everywhere (the rate-mismatch
   error lists achievable rates; the 502 tells you which binary is missing).
