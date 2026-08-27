@@ -21,11 +21,16 @@ use std::f32::consts::PI;
 
 /// Configuration for the spectral-subtraction denoiser.
 ///
-/// Defaults match the Python `AIDenoiserConfig` (8 kHz mono speech):
+/// Defaults match the Python `AIDenoiserConfig` (8 kHz mono speech)
+/// but in **float32 units** (the Python AIDenoiser works on int16
+/// directly; the Rust impl takes float32 samples in [-1, 1] from the
+/// ctypes FFI boundary, so the noise threshold is the int16 value
+/// 3000 / 32768 ≈ 0.0915).
 ///   - frame_size = 480 (RNNoise-compatible)
 ///   - fft_size = 512 (next power of 2 ≥ frame_size)
 ///   - hop_size = 240 (50% overlap)
-///   - noise_update_rms = 3000 (well below voice, above silence)
+///   - noise_update_rms = 0.0915 (well below voice, above silence,
+///     in float32 [-1, 1] units = 3000 int16 / 32768)
 ///   - alpha = 1.5 (subtraction aggressiveness)
 ///   - beta = 0.10 (spectral floor — prevents musical noise)
 ///   - noise_adapt_rate = 0.10 (slow noise-floor adaptation)
@@ -46,7 +51,7 @@ impl Default for DenoiserConfig {
             frame_size: 480,
             fft_size: 512,
             hop_size: 240,
-            noise_update_rms: 3000.0,
+            noise_update_rms: 3000.0 / 32768.0, // float32 equivalent of 3000 int16
             alpha: 1.5,
             beta: 0.10,
             noise_adapt_rate: 0.10,
@@ -92,7 +97,7 @@ impl std::error::Error for DeepFilterError {}
 /// chunk-by-chunk.
 pub struct Denoiser {
     pub frame_size: usize,
-    config: DenoiserConfig,
+    pub config: DenoiserConfig,
     /// Tail of the previous input (for 50% overlap).
     prev_input_tail: Vec<f32>,
     /// Running noise floor estimate (magnitude per bin).
@@ -101,10 +106,6 @@ pub struct Denoiser {
     overlap_buf: Vec<f32>,
     /// Hann window (frame_size).
     window: Vec<f32>,
-    /// FFT workspace (real FFT, naïve DFT — sufficient for 512-pt at
-    /// audio frame rates; a future slice may swap to rustfft for
-    /// speed, but the algorithm is identical).
-    fft_buf: Vec<Complex32>,
     /// Sample counter for diagnostics.
     samples_processed: u64,
 }
@@ -165,16 +166,22 @@ impl Denoiser {
                 "hop_size must be <= frame_size",
             ));
         }
-        let window = hann_window(config.frame_size);
-        let n_bins = config.fft_size / 2 + 1;
+        // Copy the fields we need BEFORE moving `config` into Self,
+        // because struct init expressions evaluate fields in order and
+        // a use-after-move on the same line would be E0382.
+        let frame_size = config.frame_size;
+        let fft_size = config.fft_size;
+        let hop_size = config.hop_size;
+        let tail_size = frame_size - hop_size;
+        let window = hann_window(frame_size);
+        let n_bins = fft_size / 2 + 1;
         Ok(Self {
-            frame_size: config.frame_size,
+            frame_size,
             config,
-            prev_input_tail: vec![0.0; config.frame_size - config.hop_size],
+            prev_input_tail: vec![0.0; tail_size],
             noise_floor: vec![0.1; n_bins],
-            overlap_buf: vec![0.0; config.fft_size],
+            overlap_buf: vec![0.0; fft_size],
             window,
-            fft_buf: vec![Complex32::default(); config.fft_size],
             samples_processed: 0,
         })
     }
@@ -207,22 +214,16 @@ impl Denoiser {
         // 1. Build the framed input: prev_tail (hop_size samples) ++ new
         //    samples, so the frame is `frame_size` long with 50% overlap
         //    from the previous call.
-        let mut frame = vec![0.0_f32; self.frame_size];
-        frame[..self.prev_input_tail.len()].copy_from_slice(&self.prev_input_tail);
-        let new_part_len = self.frame_size - self.prev_input_tail.len();
-        frame[self.prev_input_tail.len()..].copy_from_slice(&samples[..new_part_len]);
-
-        // Save the new tail for the next call (the last hop_size samples
-        // of `samples`).
-        let tail_len = self.config.hop_size.min(samples.len());
-        self.prev_input_tail[..self.frame_size - self.config.hop_size]
-            .copy_from_slice(&frame[self.config.hop_size..]);
-        // Actually: prev_input_tail should be the last (frame_size -
-        // hop_size) samples of `frame`, not of `samples`. Let's fix.
         let tail_size = self.frame_size - self.config.hop_size;
-        self.prev_input_tail = frame[self.config.hop_size..self.config.hop_size + tail_size]
-            .to_vec();
-        let _ = tail_len; // quiet unused warning
+        let mut frame = vec![0.0_f32; self.frame_size];
+        // The previous tail (tail_size samples) leads, then the new
+        // hop_size samples follow.
+        frame[..tail_size].copy_from_slice(&self.prev_input_tail[..tail_size]);
+        frame[tail_size..].copy_from_slice(&samples[..self.config.hop_size]);
+
+        // Save the new tail for the next call (the last tail_size
+        // samples of `frame`).
+        self.prev_input_tail = frame[self.config.hop_size..].to_vec();
 
         // 2. Apply Hann window.
         for i in 0..self.frame_size {
