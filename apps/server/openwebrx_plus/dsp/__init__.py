@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from .audio import AudioChain, DemodMode
 from .fft import FftChain
+from .preprocess import IQPreprocessor, NoiseBlanker, NotchFilter
 from .types import AudioFrame, DSPParams, FftFrame
 
 __all__ = [
@@ -36,4 +37,7 @@ __all__ = [
     "DSPParams",
     "FftChain",
     "FftFrame",
+    "IQPreprocessor",
+    "NoiseBlanker",
+    "NotchFilter",
 ]

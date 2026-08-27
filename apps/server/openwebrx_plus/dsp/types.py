@@ -91,17 +91,24 @@ class DSPParams:
             you want a fixed makeup gain.
 
         notch_enabled / notch_freq_hz / notch_q
-            NOT IMPLEMENTED in slice-5.2 — pycsdr has no native Notch
-            block. Queued for slice-5.3 (either a custom Python notch or
-            an upstream pycsdr contribution). The fields exist so the UI
-            can show the controls with an "experimental" badge; the
-            AudioChain honors them by inserting a no-op Bandpass for now.
+            Slice-7 (LIVE): when ``notch_enabled`` is True and freq/Q
+            are provided, a single-pole-pair complex IIR notch is
+            applied to the IQ stream BEFORE the pycsdr chains. The
+            notch rejects a narrow band at ``+notch_freq_hz`` offset
+            from the SDR center (typical use: kill a 1 kHz spur from
+            a switching PSU, or a CW carrier on top of a SSB signal
+            you're trying to copy). Q controls bandwidth: 30 = ~33 Hz
+            notch for typical CW interference, 100 = ~10 Hz for tight
+            selective cut. Implementation: ``dsp.preprocess.NotchFilter``.
 
         noise_blanker_enabled / noise_blanker_threshold
-            NOT IMPLEMENTED in slice-5.2 — pycsdr has no native Nb
-            block. Same situation as notch: fields exist for UI
-            completeness, AudioChain honors them with a no-op until
-            slice-5.3 lands the real implementation.
+            Slice-7 (LIVE): when enabled, an impulse-noise suppressor
+            runs before the pycsdr chains. The blanker maintains a
+            running noise-floor estimate and clips any sample whose
+            magnitude exceeds ``threshold_db`` above the floor (default
+            10 dB — gentle enough to leave voice intact, aggressive
+            enough to kill lightning/ignition pulses). Implementation:
+            ``dsp.preprocess.NoiseBlanker``.
     """
 
     low_cut_hz: float | None = None
@@ -111,7 +118,7 @@ class DSPParams:
     dc_block_enabled: bool | None = None
     deemphasis_enabled: bool | None = None
     manual_gain_db: float | None = None
-    # Slice-5.3 — not yet implemented in the chain.
+    # Slice-7 — notch + NB are now LIVE (dsp.preprocess.IQPreprocessor).
     notch_enabled: bool | None = None
     notch_freq_hz: float | None = None
     notch_q: float | None = None

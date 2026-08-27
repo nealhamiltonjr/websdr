@@ -1,6 +1,6 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-28, after slice-6.5 (runtime-gain for airspy/soapy/sdrplay/kiwi + AIS decoder + linked readouts + popout crosshair sync + LICENSE completion)
+**Updated:** 2026-08-28, after slice-7 (notch filter + noise blanker — completes the DSP fine-grained controls thesis)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
 **Companion:** `ADR/` for decision records; `docs/slice-01-plan.md` for the original slice plan (kept for history).
 
@@ -8,26 +8,26 @@
 
 ## TL;DR
 
-The platform is a working, hardware-free, end-to-end SDR receiver with **12 source backends** (real drivers, IQ-file replay, synthetic, VFO taps, and four internet remotes — all with runtime gain control) → pycsdr C-backed DSP → binary FFT/audio over WebSocket → a SolidJS + Dockview + WebGL2 multi-receiver workspace with per-receiver tuning, **linked cursor readouts** (S-Meter + Frequency Counter follow the crosshair across panels and popouts), gain/DSP controls, and **THREE live decoders** — the in-process Mode S stack, the subprocess dump1090 plugin, and the new in-process AIS decoder feeding a vessel-list viz (the VRS-killer story's first half). All quality gates pass. The next frontier is the map view (MapLibre), the AI cascade modules, and federation polish.
+The platform is a working, hardware-free, end-to-end SDR receiver with **12 source backends** (real drivers, IQ-file replay, synthetic, VFO taps, and four internet remotes — all with runtime gain control) → pycsdr C-backed DSP → binary FFT/audio over WebSocket → a SolidJS + Dockview + WebGL2 multi-receiver workspace with per-receiver tuning, **linked cursor readouts** (S-Meter + Frequency Counter follow the crosshair across panels and popouts), gain/DSP controls, **THREE live decoders** (in-process Mode S, subprocess dump1090, in-process AIS + vessel-list), AND a complete **IQ preprocessor** (single-pole complex IIR notch + adaptive noise blanker) that runs before the pycsdr chains — the user's "pull out the weak signal" thesis is now fully realized: all 8 DSPParams controls (bandpass / AGC / squelch / DC block / de-emphasis / manual gain / notch / NB) are LIVE end-to-end. All quality gates pass. The next frontier is the map view (MapLibre), the AI cascade modules, and federation polish.
 
 ## Verified health (this snapshot, 2026-08-28)
 
 | Gate | Result |
 |---|---|
-| Server tests (`scripts/run-server-tests.sh`) | **319/319 pass** (298 baseline + 21 new AIS, ~85% coverage) |
-| `mypy --strict` (45 files) | **clean** |
+| Server tests (`scripts/run-server-tests.sh`) | **354/354 pass** (322 baseline + 32 new preprocess, ~84% coverage) |
+| `mypy --strict` (47 files) | **clean** |
 | `ruff check` | **clean** |
-| Web `vitest` | **112/112 pass** (9 files — +17 new: freqAxis 9 + ReceiverSession 8) |
+| Web `vitest` | **112/112 pass** (9 files) |
 | Web `tsc --noEmit` | **clean** |
 | `vite build` | clean (this session) |
-| **GitHub Actions CI** (`ci.yml`) | **all 5 jobs green** on every commit from slice-5.8 onward — last 4 runs (`2b25b53` → `d56c558` → `198141f` → `edc5a09`) all SUCCESS |
+| **GitHub Actions CI** (`ci.yml`) | **all 5 jobs green** on every commit from slice-5.8 onward — last 8 runs (`7ff7d86` → ... → `737ffbe`) all SUCCESS |
 
 - Codebase size: **~19.8 k lines** Python (server + tests, 26 test files) · **~10.8 k lines** TS/TSX (web).
 - Registered sources: **11** (`rtl_sdr`, `rtl_tcp`, `airspy`, `sdrplay`, `soapy`, `kiwi`, `spyserver`, `openwebrx_remote`, `vfo`, `file`, `simulated`) — all now support runtime gain.
 - Decoder plugins: **3** (`adsb` in-process, `dump1090` subprocess, `ais` in-process) — ADS-B and AIS each feed their own list viz.
 - ADRs accepted: **7** (001 workspace, 002 DSP+AI cascade, 003 decoders, 004 pycsdr/sources, 005 VFO, 006 federation, 007 IQ-to-audio enhancement rejection).
 - In-app panels (slice-5.1): **Settings** (display/audio/DSP/sources/decoders/debug sections, persisted to TOML) + **Debugger** (live log ring buffer + error capture + filters + export + auto-refresh).
-- DSP controls (slice-5.2): per-receiver **DSPControls** drawer with bandpass width / AGC / squelch / DC block / de-emphasis / manual gain (wired to pycsdr blocks); notch filter + noise blanker accepted but stubbed.
+- DSP controls (slice-5.2 + slice-7): per-receiver **DSPControls** drawer with all 8 controls LIVE end-to-end — bandpass width / AGC / squelch / DC block / de-emphasis / manual gain (pycsdr blocks, slice-5.2) + **notch filter** (single-pole complex IIR, slice-7) + **noise blanker** (adaptive impulse clipper, slice-7). The notch + NB run as a pure-numpy IQ preprocessor BEFORE the pycsdr chains, so both the FFT and the audio paths see the cleaned IQ.
 - LICENSE: canonical AGPL-3.0 text (674 lines, slice-6.1) — the prior stub carried only the preamble.
 
 ## Codebase map
@@ -50,7 +50,8 @@ openwebrx-plus/
 │   │   ├── directory.py    # rx.kiwisdr.com + receiverbook.de (TTL cache)
 │   │   ├── probe.py    # GET /api/hardware concurrent sweep
 │   │   └── _adpcm.py / _hw_common.py  # codec ports; callback→asyncio bridge, pacer
-│   ├── dsp/            # pycsdr chains: FftChain, AudioChain (6 modes, raw/classic)
+│   ├── dsp/            # pycsdr chains: FftChain, AudioChain (6 modes, raw/classic);
+│   │                   # preprocess.py — notch filter (complex IIR) + noise blanker (slice-7)
 │   ├── sessions/       # ReceiverSession (IQ + display-stream paths), SessionRegistry
 │   ├── plugins/        # DecoderPlugin ABC + registry; adsb.py (Mode S in-process),
 │   │                   # dump1090.py + subprocess.py (PluginRunner, ADR-003 family #2),
@@ -111,6 +112,7 @@ openwebrx-plus/
 | 6.3 | Popout crosshair sync via SharedWorker broadcast (the #8 priority from the next-up list): new `cursor` client→worker + worker→client message in `sdr.shared-worker.ts`; `fanoutCursor()` broadcasts to every subscriber of a receiverId (originator skips its own echo via `sourceVizId === vizId` in `attachCrosshair`). ReceiverSession: new `setCursorForward(fn|null)` (installs a sink called from `setCursor` so local cursor events propagate to the worker), new `ingestRemoteCursor(hz, sourceVizId)` (updates local state + emits on `cursorStream` but does NOT re-forward — otherwise we'd echo forever: A→worker→B→worker→A→…). main.tsx + popout.tsx wire `setCursorForward` on every session and ingest cursor events from the worker. 8 new ReceiverSession tests covering the full forward/ingest matrix. |
 | 6.4 | AIS decoder (in-process plugin) + vessel list viz (the #4 priority — VRS-killer story's first half): new `plugins/ais_protocol.py` (pure protocol: CRC-16-CCITT-FALSE verified against the canonical '123456789' → 0x29B1 vector, 6-bit ASCII charset per ITU-R M.1371-5 Annex A, BitReader with proper end-sentinel padding behavior, HDLC stuff/destuff, field decoders for Type 1/2/3/4/5/18/21). New `plugins/ais_demod.py` (streaming GMSK demodulator + HDLC deframer — FM-demod → mid-symbol bit slice → flag find → destuff → CRC verify → decode; sample rate must be integer multiple of 9600, default 48 kS/s). New `plugins/ais.py` (AisDecoderPlugin mirrors AdsbDecoderPlugin: per-receiver vessel table, frame+vessel events, snapshot coalescing at 1 Hz). New `tests/test_ais_decoder.py` (21 tests covering CRC, BitReader, charset, HDLC framing, field decoders for Type 1 + Type 5, GMSK round-trip, plugin). Shared-types: AIS_DECODERS + AisFrameEvent + AisVesselRow + AisVesselEvent + isAisVesselEvent + isAisFrameEvent. Frontend: new `VesselListViz.tsx` (mirrors AircraftListViz; ship-type + nav-status tables for human-readable labels). Registered in builtins.ts as 'vessel-list'. |
 | 6.5 | Runtime-gain gaps closed (the #7 priority — was the last item in the next-up list before this slice closed it): airspy/soapy/sdrplay/kiwi now implement the RuntimeGainSource protocol. Airspy: stash binding+dev in spawn(), set_runtime_gain(gain_db) → binding.set_gains(dev, gain_mode="linearity", linearity=clip(round(gain_db), 0, 21), ...); set_runtime_gain(None) → lib.airspy_set_lna_agc(1) + airspy_set_mixer_agc(1). Soapy: stash dev_inst; set_runtime_gain(gain_db) → dev.set_gain(names[0], float(gain_db)); set_runtime_gain(None) → dev.set_agc(True). SDRplay: stash binding_inst; set_runtime_gain(gain_db) → grdb=clip(59 - round(gain_db), 20, 59); binding.gain_change_request(grdb, self.lna_state); set_runtime_gain(None) → binding.agc_control(True). Kiwi: stash _connection (the live websocket); set_runtime_gain(gain_db) → loop.create_task to send 'SET AGC=0' then 'SET GAIN=<dB>' on the ws; set_runtime_gain(None) → 'SET AGC=1'. All four return False when not streaming; all safe to call from any asyncio task while spawn() is being consumed. 3 new airspy tests covering the false-when-not-streaming, applied-while-streaming (verifies linearity=15 overrides spawn-time linearity=5), false-after-close cases. Source runtime-gain coverage is now COMPLETE: rtl_sdr (USB+TCP, slice-4.7), file/sim (digital, slice-3), spyserver (slice-4.8), airspy/soapy/sdrplay/kiwi (slice-6.5). |
+| 7 | DSP fine-grained controls COMPLETION — the user's "pull out the weak signal" thesis fully realized. The notch + noise blanker fields were accepted-but-no-op since slice-5.2 (pycsdr has no native Notch/Nb block). Slice-7 ships a pure-numpy IQ preprocessor that runs BEFORE the pycsdr chains so both FFT + audio see the cleaned IQ. `dsp/preprocess.py`: `NotchFilter` is a single-pole-pair complex IIR notch (zero at e^(jω0) on the unit circle, pole at r·e^(jω0) just inside) — rejects ONLY +f0 (the desired behavior for SSB where the signal sits on one side and a spur on the other); `NoiseBlanker` is an impulse-noise suppressor that tracks a 5 ms EMA of the IQ magnitude and clips any sample exceeding `threshold_db × floor` down to the threshold (phase-preserving real multiply). `IQPreprocessor` orchestrates both — zero-overhead no-op when no stage is active, input array never mutated (hub buffers may be shared across VFO taps), state retained across chunked calls, `reconfigure()` for live param updates. `ReceiverSession.start()` builds the preprocessor alongside the pycsdr chains; `set_dsp_params()` calls `reconfigure()` BEFORE rebuilding the AudioChain so the next IQ chunk sees both. Frontend `DSPControls.tsx`: removed "EXPERIMENTAL" badges (they're LIVE), fixed NB threshold range (was 0..1 placeholder, now 3..30 dB matching the NoiseBlanker's interpretation), extended notch freq range to -20000..+20000 Hz (negative freqs = lower sideband notch, supported by the complex IIR), updated hint text with implementation details. 32 new preprocess tests (NotchFilter attenuation/preservation/dtype/state/complex-vs-real behavior; NoiseBlanker impulse suppression/phase/dtype/empty; IQPreprocessor lifecycle; ReceiverSession integration start/reconfigure/disable/stop). All 8 DSPParams controls now LIVE end-to-end. |
 
 ## What works end-to-end today
 
@@ -120,6 +122,7 @@ openwebrx-plus/
 - Hover over any FFT canvas in any window (including popouts) → cursor crosshair appears on every other FFT canvas of the same receiver, the S-Meter reads the bin value AT the cursor frequency (not the median), the Frequency Counter shows the cursor frequency (with the tuned frequency still visible underneath). **The crosshair sync spans popout windows via SharedWorker broadcast** (slice-6.3).
 - Attach an ADS-B decoder to a 2 Msps receiver → live aircraft table — in-process `adsb` (one click) or subprocess `dump1090` (REST; positions + lifecycle state when the binary decodes them) — proven on the baked fixture: 3 aircraft, CRC-valid frames, both plugin families.
 - Attach an AIS decoder to a 48 kSps receiver (VFO tap on 162 MHz) → live vessel table — MMSI, name, callsign, IMO, lat/lon, speed, course, nav_status — proven on the in-test GMSK fixture (Type 1 + Type 5 messages round-trip through encode → modulate → demod → decode).
+- Open the DSPControls drawer on any receiver → all 8 fine-grained controls are LIVE end-to-end (slice-5.2 + slice-7): bandpass width, AGC, squelch, DC block, de-emphasis, manual gain (pycsdr blocks) **+ notch filter (single-pole complex IIR) + noise blanker (adaptive impulse clipper)** — the pure-numpy IQ preprocessor runs before the pycsdr chains so both the FFT and the audio paths see the cleaned IQ. The user's "pull out the weak signal" thesis is fully realized.
 - Everything above runs **hardware-free**; the same code paths take real hardware (drivers flagged for first-live-connection checks).
 
 ## What's left

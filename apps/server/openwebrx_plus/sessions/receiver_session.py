@@ -39,7 +39,7 @@ import numpy as np
 import structlog
 
 from ..config import Settings
-from ..dsp import AudioChain, DSPParams, FftChain
+from ..dsp import AudioChain, DSPParams, FftChain, IQPreprocessor
 from ..plugins.base import (
     DecoderAlreadyAttached,
     DecoderAttachContext,
@@ -131,6 +131,11 @@ class ReceiverSession:
     _receiver_id_hash: int = field(default=0, init=False)
     _fft_chain: FftChain | None = field(default=None, init=False)
     _audio_chain: AudioChain | None = field(default=None, init=False)
+    # Slice-7: IQ preprocessor (notch + noise blanker). Built alongside
+    # the AudioChain; reconfigured on set_dsp_params. Operates on the
+    # raw complex64 chunks from the hub BEFORE they're fed to the
+    # pycsdr chains (so both FFT + audio see the cleaned IQ).
+    _iq_preprocessor: IQPreprocessor | None = field(default=None, init=False)
     _hub: IqHub | None = field(default=None, init=False)
     _decoders: dict[str, _DecoderAttachment] = field(default_factory=dict, init=False)
     # Serializes chain swaps (set_mode / set_dsp_mode / stop) against the
@@ -185,6 +190,12 @@ class ReceiverSession:
             max_db=self.max_db,
         )
         self._audio_chain = self._build_audio_chain()
+        # Slice-7: build the IQ preprocessor (notch + NB) from the
+        # current dsp_params. Reused on set_dsp_params via reconfigure().
+        self._iq_preprocessor = IQPreprocessor(
+            sample_rate=self.sample_rate,
+            params=self.dsp_params,
+        )
         # ADR-005: consume through a hub so VFO taps can share this stream.
         # The hub passes self.gain into source.spawn() (pre-start gain),
         # while later changes go through Source.set_runtime_gain.
@@ -220,6 +231,9 @@ class ReceiverSession:
         if self._audio_chain is not None:
             self._audio_chain.stop()
             self._audio_chain = None
+        # Slice-7: the IQ preprocessor holds no external resources (it's
+        # pure numpy state) — drop the reference so GC can reclaim it.
+        self._iq_preprocessor = None
         # Destroying the hub stops the source once and sentinel-ends every
         # VFO tap sharing it (the hub owns the source lifecycle now).
         # Display-stream sessions never create a hub; destroy_hub is a no-op
@@ -369,7 +383,17 @@ class ReceiverSession:
         assert hub is not None  # set in start()
         try:
             async for chunk in hub.stream():
-                iq_bytes = np.ascontiguousarray(chunk, dtype=np.complex64).tobytes()
+                # Slice-7: apply IQ preprocessor (notch + NB) before
+                # feeding the pycsdr chains. The preprocessor is a pure-
+                # numpy filter that runs in the asyncio task; it returns
+                # the same complex64 view (no copy) when no stage is
+                # active. When the notch or NB IS active, it produces a
+                # new array — and we tobytes() that array for the chains.
+                iq_arr = np.ascontiguousarray(chunk, dtype=np.complex64)
+                pre = self._iq_preprocessor
+                if pre is not None and pre.active:
+                    iq_arr = pre.process(iq_arr)
+                iq_bytes = iq_arr.tobytes()
                 now = time.monotonic()
                 # Feed + drain under the chain lock so a concurrent
                 # set_mode/set_dsp_mode rebuild can't interleave with a
@@ -554,6 +578,12 @@ class ReceiverSession:
             patch=patch.to_dict(),
         )
         self.dsp_params = new_params
+        # Slice-7: reconfigure the IQ preprocessor (notch + NB). The
+        # preprocessor is rebuilt from scratch — its IIR state is reset,
+        # which is fine because the new params might notch a different
+        # frequency entirely.
+        if self._iq_preprocessor is not None:
+            self._iq_preprocessor.reconfigure(new_params)
         await self._rebuild_audio_chain()
         return True, ""
 

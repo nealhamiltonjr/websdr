@@ -59,7 +59,10 @@ export function DSPControls(props: DSPControlsProps): JSX.Element {
   const [notchFreq, setNotchFreq] = createSignal(1000);
   const [notchQ, setNotchQ] = createSignal(30);
   const [nbOn, setNbOn] = createSignal(false);
-  const [nbThreshold, setNbThreshold] = createSignal(0.7);
+  // NB threshold is in dB above the noise floor (slice-7 — was a
+  // fractional 0..1 placeholder; the new NoiseBlanker treats this as
+  // dB, 6=gentle, 15=aggressive).
+  const [nbThreshold, setNbThreshold] = createSignal(10);
 
   // Sync from props when the metadata frame updates the params.
   createEffect(() => {
@@ -78,7 +81,7 @@ export function DSPControls(props: DSPControlsProps): JSX.Element {
     setNotchFreq(p.notch_freq_hz ?? 1000);
     setNotchQ(p.notch_q ?? 30);
     setNbOn(p.noise_blanker_enabled === true);
-    setNbThreshold(p.noise_blanker_threshold ?? 0.7);
+    setNbThreshold(p.noise_blanker_threshold ?? 10);
   });
 
   // Patch senders — each one sends just the changed field(s) so the
@@ -237,11 +240,10 @@ export function DSPControls(props: DSPControlsProps): JSX.Element {
                 </Field>
               </Section>
 
-              {/* Notch filter — experimental (slice-5.3) */}
+              {/* Notch filter — LIVE (slice-7, complex IIR) */}
               <Section
                 title="Notch filter"
-                hint="EXPERIMENTAL — pycsdr has no native Notch block. Field accepted, no-op until slice-5.3 (custom Python notch or upstream pycsdr contribution)."
-                badge="experimental"
+                hint="Narrow single-pole complex IIR notch at +freq offset from center. Kills CW carriers / switching-PSU spurs without touching the opposite sideband. Q=30 ≈ 33 Hz bandwidth."
               >
                 <Field label="Notch on">
                   <Toggle checked={notchOn()} onChange={(v) => {
@@ -253,7 +255,7 @@ export function DSPControls(props: DSPControlsProps): JSX.Element {
                   <Field label={`Notch freq (Hz): ${notchFreq()}`}>
                     <RangeInput
                       value={notchFreq()}
-                      min={0}
+                      min={-20000}
                       max={20000}
                       step={10}
                       onChange={(v) => {
@@ -277,11 +279,10 @@ export function DSPControls(props: DSPControlsProps): JSX.Element {
                 </Show>
               </Section>
 
-              {/* Noise blanker — experimental (slice-5.3) */}
+              {/* Noise blanker — LIVE (slice-7, adaptive clipper) */}
               <Section
                 title="Noise blanker"
-                hint="EXPERIMENTAL — pycsdr has no native Nb block. Field accepted, no-op until slice-5.3."
-                badge="experimental"
+                hint="Impulse-noise suppressor: tracks the running noise floor (5 ms EMA) and clips any sample whose magnitude exceeds the threshold (in dB above floor). 6 dB = gentle, 10 dB = balanced, 15 dB = aggressive."
               >
                 <Field label="Noise blanker on">
                   <Toggle checked={nbOn()} onChange={(v) => {
@@ -290,12 +291,12 @@ export function DSPControls(props: DSPControlsProps): JSX.Element {
                   }} />
                 </Field>
                 <Show when={nbOn()}>
-                  <Field label={`Threshold: ${nbThreshold().toFixed(2)}`}>
+                  <Field label={`Threshold (dB above floor): ${nbThreshold().toFixed(1)}`}>
                     <RangeInput
                       value={nbThreshold()}
-                      min={0}
-                      max={1}
-                      step={0.01}
+                      min={3}
+                      max={30}
+                      step={0.5}
                       onChange={(v) => {
                         setNbThreshold(v);
                         props.onPatch({ noise_blanker_threshold: v });
