@@ -196,3 +196,81 @@ export function isAisFrameEvent(
     aisDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'frame'
   );
 }
+
+// ============================================================================
+// FT8 (and similar audio-band digital modes) — slice-21
+//
+// FT8 is a weak-signal digital mode used on HF (amateur radio):
+//   - 8-FSK at 6.25 baud, 12.5 Hz tone spacing, 15-second slots.
+//   - Each message: 77 bits + LDPC + CRC, decoded free-form as
+//     "CALLSIGN GRIDLOC SIGNAL_REPORT" (e.g. "K1ABC KO51 -12").
+//   - The reference impl is WSJT-X; this slice ships the *wire format*
+//     for the OpenWebRX+ plugin output, not the demodulator itself.
+//
+// The wire schema is intentionally generic: it covers any audio-band
+// digital mode (FT8, FT4, WSPR, JT65, JT9, PSK31, RTTY) — each emits
+// `kind: 'message'` events carrying a free-form `text` field plus
+// optional structured fields. The DigiMessageListViz renders any of
+// them in a single table.
+// ============================================================================
+
+/** Decoder names that emit audio-band digital-mode wire events.
+ *
+ *  Slice-21 ships the FT8 stub plugin (manifest + status() only — the
+ *  full demodulator is a future slice). The wire format here lets the
+ *  viz component + tests land first, mirroring slice-20's SDRangel
+ *  manifest pattern. */
+export const DIGI_MESSAGE_DECODERS = ['ft8'] as const;
+export type DigiMessageDecoderName = (typeof DIGI_MESSAGE_DECODERS)[number];
+
+/** FT8 (or similar audio-band digi-mode) "message" event — one
+ *  decoded free-form text message (callsign, grid, signal report,
+ *  etc.). The decoder plugin emits these as IQ is fed in. */
+export interface DigiMessageEvent {
+  kind: 'message';
+  ts: number;
+  /** The mode name (FT8 / FT4 / WSPR / JT65 / JT9 / PSK31 / RTTY). */
+  mode: string;
+  /** The decoded free-form text (typically "CALLSIGN GRIDLOC SNR" for
+   *  FT8). Plain ASCII; the viz renders it as-is. */
+  text: string;
+  /** Optional structured fields the decoder may populate. */
+  callsign?: string;
+  grid_locator?: string;
+  /** SNR in dB (FT8 reports -20 to +10 typical). */
+  snr_db?: number;
+  /** Audio frequency offset within the decoder's passband (Hz). */
+  audio_offset_hz?: number;
+  /** UTC timestamp of the slot (FT8 slots are aligned to 15s). */
+  slot_utc?: number;
+}
+
+/** Snapshot of recent messages (last N=50 by default; the viz keeps a
+ *  ring buffer). New messages emit a fresh snapshot event. */
+export interface DigiMessageListEvent {
+  kind: 'messages';
+  ts: number;
+  messages: DigiMessageEvent[];
+}
+
+const digiMessageDecoderNames: readonly string[] = DIGI_MESSAGE_DECODERS;
+
+/** Type guard: this decoder event is a digi-mode message. */
+export function isDigiMessageEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: DigiMessageEvent } {
+  return (
+    digiMessageDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'message'
+  );
+}
+
+/** Type guard: this decoder event is a digi-mode message list snapshot. */
+export function isDigiMessageListEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: DigiMessageListEvent } {
+  return (
+    digiMessageDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'messages'
+  );
+}

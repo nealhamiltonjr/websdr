@@ -3,7 +3,8 @@
 Importing this package registers the bundled decoders: the in-process
 ADS-B plugin, the subprocess dump1090 plugin (slice-4.9), the in-process
 AIS plugin (slice-6.4), the in-process dump978 UAT plugin (slice-9),
-and the in-process CW (Morse code) plugin (slice-13).
+the in-process CW (Morse code) plugin (slice-13), and the in-process
+FT8 audio-band digital-mode plugin (slice-21).
 """
 
 from .adsb import AdsbDecoderPlugin  # noqa: F401  (registers itself)
@@ -20,6 +21,7 @@ from .base import (  # noqa: F401
 from .cw import CwDecoderPlugin  # noqa: F401  (registers itself)
 from .dump978 import Dump978Plugin  # noqa: F401  (registers itself)
 from .dump1090 import Dump1090Plugin  # noqa: F401  (registers itself)
+from .ft8 import FT8DecoderPlugin  # noqa: F401  (registers itself)
 from .registry import DecoderRegistry, decoder_registry  # noqa: F401
 from .subprocess import (  # noqa: F401
     PluginRunner,
@@ -41,6 +43,7 @@ __all__ = [
     "DecoderRegistry",
     "Dump1090Plugin",
     "Dump978Plugin",
+    "FT8DecoderPlugin",
     "PluginRunner",
     "SubprocessDecoderPlugin",
     "SubprocessSpec",

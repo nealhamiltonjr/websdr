@@ -24,5 +24,6 @@ import './AircraftListViz';
 import './VesselListViz';
 import './AircraftMapViz';
 import './VesselMapViz';
+import './DigiMessageListViz';
 
 export { getViz, listViz } from './registry';

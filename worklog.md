@@ -349,3 +349,75 @@ All 445 server tests + 150 web tests pass; ruff + mypy --strict + tsc + eslint c
 (device discovery → center freq set → spectrum server WS → RemoteFftFrame).
 The module docstring at `openwebrx_plus/sources/sdrangel.py` documents
 the full plan; the manifest scaffold unblocks UI advertisement today.
+
+---
+## slice-21 (2026-08-28): FT8 / audio-band digi-mode plugin + DigiMessageListViz
+
+**Goal:** close the "Audio-band decoders — FT8/WSJT-X + FLDIGI" +
+"DigiMessageListViz" roadmap items. FT8 is a weak-signal digital
+mode on HF; the reference impl is WSJT-X. Slice-21 ships the
+contract surface (wire types + plugin stub + visualization) so the
+UI can offer the FT8 option in the +viz dropdown today; the actual
+FSK demodulator + LDPC decoder lands in a future slice.
+
+**Shipped:**
+- **Wire types in `packages/shared-types/src/decoder.ts`**:
+  - `DIGI_MESSAGE_DECODERS = ['ft8']` (const) + `DigiMessageDecoderName`
+  - `DigiMessageEvent` (kind: 'message', mode, text, callsign,
+    grid_locator, snr_db, audio_offset_hz, slot_utc)
+  - `DigiMessageListEvent` (kind: 'messages', messages[]) — ring
+    buffer snapshot
+  - `isDigiMessageEvent`, `isDigiMessageListEvent` type guards
+- **FT8 plugin stub at `apps/server/openwebrx_plus/plugins/ft8.py`**:
+  - `FT8DecoderPlugin` class registered in `DecoderRegistry` (GET
+    /api/decoders lists it)
+  - Manifest: name="ft8", label="FT8 (audio-band digi modes)",
+    tap_point="rf_band", required_sample_rate=12000, events=
+    ("message", "messages"). Description clearly states "slice-21
+    manifest stub" so operators know the demodulator isn't shipped.
+  - `feed_iq` / `feed_audio` return [] (no demod yet)
+  - `status()` returns {messages_decoded:0, crc_failures:0, slot_count:0,
+    stub: True, note: "..."} so the UI can surface the stub state
+  - Module docstring documents the full implementation plan (FSK
+    demod → LDPC soft-decision → CRC-14 → message unpack).
+  - Constants: FT8_SAMPLE_RATE=12000, FT8_TONE_SPACING_HZ=6.25,
+    FT8_BIT_RATE_BAUD=6.25, FT8_SLOT_SECONDS=15 (protocol spec).
+- **Frontend `DigiMessageListViz.tsx`** at
+  `apps/web/src/visualizations/`:
+  - SolidJS component subscribes to receiver decoderStream, renders
+    a scrollable table of recent messages (time, mode, SNR, audio
+    offset, text, age).
+  - Empty-state banner when no messages yet (slice-21 stub state).
+  - Footer with "latest decode" + "N / 50 buffer".
+  - Registered as viz type "digi-message-list" with displayName
+    "Digital Messages" + default size 520×280.
+  - Added to `builtins.ts` for side-effect registration.
+- **Model `digiMessageModel.ts`**: pure state reducer over decoder
+  events. Tracks messages (ring buffer, MAX_MESSAGES=50),
+  messageCount, lastMessage, mode, decoderState. Format helpers:
+  formatMessageSummary, formatTime (HH:MM:SSZ UTC), formatAge.
+
+**Tests:**
+- **Server (8 new)** at `apps/server/tests/test_ft8_decoder.py`:
+  plugin manifest fields, status reports stub state, feed_iq returns
+  empty + handles any chunk size, feed_audio stub, stop is noop, FT8
+  constants match protocol spec, plugin registered in DecoderRegistry.
+- **Web (13 new)** at `apps/web/src/visualizations/digiMessageModel.test.ts`:
+  initial state empty, ignores non-FT8 family, handles single message,
+  appends newest-first, caps at MAX_MESSAGES ring buffer, handles
+  messages snapshot, decoder_state lifecycle, preserves messageCount
+  across snapshots. Plus formatters: formatMessageSummary composes
+  mode+SNR+offset+text, omits missing optional fields; formatTime
+  produces HH:MM:SSZ UTC; formatAge produces human-friendly age
+  strings + clamps negative ages.
+
+All 453 server tests + 163 web tests pass; ruff + mypy --strict + tsc +
+eslint clean.
+
+**Sync:** commit `a49762a..(slice-21)` — will push next.
+
+**Future work remaining:** the actual FSK demodulator + LDPC + CRC-14
++ message unpack (per the module docstring). The wire-format contract
+is shipped; once the demod produces events, the viz populates
+automatically. FLDIGI virtual audio cable integration is also open
+(operators can run FLDIGI locally today).
