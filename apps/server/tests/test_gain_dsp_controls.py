@@ -7,8 +7,8 @@ Covers:
     pre-start storage (flows into source.spawn via the IqHub), live
     application, auto (None) reset, display-stream rejection
   - ReceiverSession.set_dsp_mode: raw/classic accepted + chain rebuilt with
-    the right conditioning topology, ai/cascade rejected (DeepFilterNet not
-    built), unknown modes rejected
+    the right conditioning topology; ai/cascade accepted since slice-10
+    (in-process AIDenoiser); unknown modes rejected
   - set_mode chain-rebuild regression (the slice-4.7 bug fix: a mode switch
     used to only update the metadata echo while the original demodulator
     kept running)
@@ -216,7 +216,10 @@ class TestSessionDspMode:
         finally:
             await _drain_sessions("rx-dsp-mode")
 
-    async def test_ai_and_cascade_rejected_until_built(self) -> None:
+    async def test_ai_and_cascade_accepted_with_denoiser(self) -> None:
+        """Slice-10: ai/cascade are now LIVE — the in-process AIDenoiser
+        (Stage 2a, spectral subtraction) ships. The denoiser is built
+        + reset on entry, dropped on exit."""
         session = create_session(
             receiver_id="rx-dsp-ai",
             source_type="simulated",
@@ -224,9 +227,17 @@ class TestSessionDspMode:
         )
         try:
             for mode in ("ai", "cascade"):
-                applied, reason = await session.set_dsp_mode(mode)
-                assert not applied
-                assert "DeepFilterNet" in reason
+                applied, _ = await session.set_dsp_mode(mode)
+                assert applied, f"mode {mode!r} should be accepted (slice-10 gate flipped)"
+                assert session._ai_denoiser is not None, (
+                    f"denoiser must be instantiated when entering {mode!r}"
+                )
+            # Switching back to raw/classic drops the denoiser (no overhead
+            # on the wire path).
+            applied, _ = await session.set_dsp_mode("raw")
+            assert applied
+            assert session._ai_denoiser is None
+            # Unknown mode is still rejected.
             applied, reason = await session.set_dsp_mode("turbo")
             assert not applied
             assert "unknown DSP mode" in reason
