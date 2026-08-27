@@ -351,6 +351,48 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return _directory_response("receiverbook", receivers)
 
+    @app.get("/api/listing")
+    async def self_listing() -> dict[str, Any]:
+        """Self-listing endpoint (slice-14, ADR-006 federation polish).
+
+        Returns THIS receiver's metadata in receiverbook-compatible JSON so
+        an operator can self-list by adding their public-facing URL to the
+        receiverbook registry (https://receiverbook.de). The shape mirrors
+        receiverbook's `RemoteReceiver` schema (the same one
+        `/api/directory/receiverbook` returns).
+
+        All fields are sourced from the server settings so an operator only
+        edits one place (apps/server/openwebrx_plus/config/settings.py — the
+        `listing` section) to publish their station.
+
+        The endpoint intentionally returns 404 when `settings.listing.enabled`
+        is False — operators must OPT IN to public listing (the privacy-
+        preserving default; the receiver doesn't broadcast itself anywhere).
+        """
+        listing = settings.listing
+        if not listing.enabled:
+            raise HTTPException(status_code=404, detail="self-listing disabled (enable via settings.listing.enabled)")
+        return {
+            "directory": "self",
+            "source_type": "openwebrx_remote",
+            "id": listing.id,
+            "name": listing.name,
+            "url": listing.url,
+            "lat": listing.lat,
+            "lon": listing.lon,
+            "users": None,
+            "online": True,
+            "extra": {
+                "description": listing.description,
+                "software": "openwebrx-plus",
+                "version": "0.1.0",
+                "tier": settings.tier,
+                "default_source": settings.default_source_type,
+                "source_count": len(SourceRegistry.all_manifests()),
+                "decoder_count": len(decoder_registry.manifests()),
+            },
+        }
+
     @app.get("/api/receivers", response_model=list[ReceiverInfo])
     async def list_receivers() -> list[ReceiverInfo]:
         return [

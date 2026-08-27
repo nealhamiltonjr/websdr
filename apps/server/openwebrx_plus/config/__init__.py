@@ -42,6 +42,26 @@ class FederationSettings(BaseModel):
     max_concurrent_remote_sources: int = 4
 
 
+class ListingSettings(BaseModel):
+    """Self-listing metadata (slice-14, ADR-006 federation polish).
+
+    Operators set these to publish their station to receiverbook.de /
+    directory.openwebrx-plus.org. The /api/listing endpoint returns this
+    metadata in receiverbook-compatible JSON so the public directory can
+    index the receiver. `enabled` defaults to False — self-listing is
+    OPT-IN (the privacy-preserving default; the receiver doesn't
+    broadcast itself anywhere).
+    """
+
+    enabled: bool = False
+    id: str = ""  # short slug, e.g. "neal-001"; left blank until set
+    name: str = ""  # human-readable, e.g. "Neal's 20m receiver (KH6)"
+    url: str = ""  # public-facing ws URL, e.g. "https://sdr.example.com:8073/ws"
+    lat: float | None = None  # operator's latitude (decimal degrees)
+    lon: float | None = None  # operator's longitude (decimal degrees)
+    description: str = ""  # free-form, e.g. "IC-7300 + dipole; HF bands"
+
+
 class Settings(BaseSettings):
     """Top-level settings."""
 
@@ -79,6 +99,7 @@ class Settings(BaseSettings):
     # Sub-tiers
     dsp: DSPSettings = Field(default_factory=DSPSettings)
     federation: FederationSettings = Field(default_factory=FederationSettings)
+    listing: ListingSettings = Field(default_factory=ListingSettings)
 
     @classmethod
     def settings_customise_sources(

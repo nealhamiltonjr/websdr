@@ -663,12 +663,20 @@ class RemoteDisplaySource:
             log.debug("secondary FFT frame skipped (digimodes not wired yet)")
             return None
         if tag == _TYPE_HD_AUDIO:
-            # HD audio (WFM music quality) is also sync-framed ADPCM at
-            # hd_output_rate; MVP: skipped so it never interleaves with the
-            # standard stream. TODO(ADR-006): decode + route as a second
-            # audio stream once the UI can pick quality.
-            log.debug("HD audio frame skipped")
-            return None
+            # Slice-14: HD audio (WFM music quality) — same ADPCM codec as the
+            # standard audio stream, but at hd_output_rate (default 48 kHz).
+            # The wire frame includes the standard ADPCM sync prefix; we decode
+            # it via the same _audio_codec instance (the codec is stateless
+            # w.r.t. the sample rate — the rate lives in the framing header,
+            # which _pack_audio_frame echoes so the client AudioPlayer
+            # resamples appropriately).
+            if self._audio_compression == "none":
+                pcm = np.frombuffer(payload, dtype="<i2").astype(np.int16)
+            else:
+                pcm = self._audio_codec.decode_with_sync(payload)
+            if len(pcm) == 0:
+                return None
+            return RemoteAudioFrame(pcm=pcm, sample_rate=self.hd_output_rate)
 
         log.debug("unknown binary frame tag", tag=tag)
         return None
