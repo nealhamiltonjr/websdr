@@ -16,9 +16,10 @@ jobs:
         working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
+      # pnpm version is sourced from package.json `packageManager` field.
+      # Passing `version:` here too causes action-setup@v4 to fail with
+      # "Multiple versions of pnpm specified". See slice-5.4 CI repair.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -47,6 +48,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # pycsdr is declared in pyproject.toml as a direct git ref and its
+      # build_wheel invokes g++ which needs the libcsdr C++ headers
+      # (csdr/module.hpp). libcsdr isn't on apt and isn't preinstalled on
+      # the GitHub runner, so the previous CI failed with
+      # "fatal error: csdr/module.hpp: No such file or directory".
+      #
+      # Fix: build libcsdr from source and install to /usr/local, which
+      # is in g++'s default search path. Then `uv sync --frozen` can
+      # build pycsdr inside the venv normally — the csdr headers will be
+      # visible to the isolated build_wheel subprocess. Mirrors the local
+      # pattern in scripts/README-dsp-bootstrap.md (with the user-prefix
+      # replaced by the system prefix /usr/local so no env vars are needed).
+      - name: Build + install libcsdr to /usr/local
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libfftw3-dev libsamplerate0-dev cmake build-essential pkg-config
+          git clone --depth 1 https://github.com/jketterl/csdr.git /tmp/csdr-build
+          cd /tmp/csdr-build
+          # Patch: src/lib/CMakeLists.txt doesn't propagate SAMPLERATE /
+          # FFTW3 include + link dirs to targets. Add them before
+          # target_link_libraries(csdr ...) — see README-dsp-bootstrap.md.
+          # (When the deps come from apt they're already in /usr/include
+          # so this is belt-and-suspenders; harmless if redundant.)
+          sed -i '/target_link_libraries(csdr/i\
+            target_include_directories(csdr PUBLIC ${SAMPLERATE_INCLUDE_DIRS} ${FFTW3_INCLUDE_DIRS})\
+            target_link_directories(csdr PUBLIC ${SAMPLERATE_LIBRARY_DIRS} ${FFTW3_LIBRARY_DIRS})' \
+            src/lib/CMakeLists.txt
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local ..
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+          # Sanity: confirm the header is now visible from the default
+          # include path. pycsdr's setup.py will look for csdr/module.hpp.
+          test -f /usr/local/include/csdr/module.hpp || \
+            { echo "libcsdr headers not installed"; exit 1; }
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run mypy openwebrx_plus
@@ -63,7 +102,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v1
         with:
-          version: '0.13.0'
+          # build.zig uses `root_module` field on StaticLibraryOptions,
+          # which is Zig 0.14+ API. 0.13.0 fails with "no field named
+          # 'root_module'". Bump to 0.14.1 (stable release as of 2025).
+          version: '0.14.1'
       - run: zig build
       - run: zig build test
 
@@ -90,9 +132,8 @@ jobs:
         working-directory: packages/shared-types
     steps:
       - uses: actions/checkout@v4
+      # pnpm version is sourced from package.json `packageManager` field.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
