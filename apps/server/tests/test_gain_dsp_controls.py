@@ -186,6 +186,109 @@ class TestSessionSetGain:
 
 
 # ---------------------------------------------------------------------------
+# Slice-15: ReceiverSession.set_frequency prefers source-retune over the
+# legacy center_freq-only metadata update when the source implements the
+# RuntimeFrequencySource protocol.
+# ---------------------------------------------------------------------------
+
+
+class _StubRetunableSource:
+    """Minimal Source stub that records set_runtime_frequency calls.
+
+    Mirrors the duck-typed protocol — ReceiverSession.set_frequency uses
+    getattr/set_runtime_frequency, so we don't need the full Source surface.
+    """
+
+    def __init__(self) -> None:
+        from openwebrx_plus.sources.base import SourceInfo
+
+        self.info = SourceInfo(type="stub", label="stub")  # type: ignore[arg-type]
+        self.calls: list[int] = []
+        self._next_ret: bool = True
+
+    def set_runtime_frequency(self, hz: int) -> bool:
+        self.calls.append(int(hz))
+        return self._next_ret
+
+    async def close(self) -> None:
+        return None
+
+
+class TestSessionSetFrequencySourceRetune:
+    async def test_started_session_forwards_to_source(self) -> None:
+        """A started session whose source implements
+        set_runtime_frequency forwards the new center to the source AND
+        updates its center_freq metadata."""
+        src = _StubRetunableSource()
+        session = ReceiverSession(
+            receiver_id="rx-freq-retune",
+            source=src,
+            center_freq=14_150_000,
+        )
+        # Pretend the stream is live (so the source-retune path fires).
+        session._stream_task = asyncio.current_task()
+        try:
+            applied = await session.set_frequency(14_200_000)
+            assert applied
+            assert src.calls == [14_200_000]
+            assert session.center_freq == 14_200_000
+        finally:
+            session._stream_task = None
+
+    async def test_started_session_source_false_falls_back(self) -> None:
+        """If the source returns False (can't honor right now), the
+        session falls through to the legacy metadata-only update."""
+        src = _StubRetunableSource()
+        src._next_ret = False
+        session = ReceiverSession(
+            receiver_id="rx-freq-fallback",
+            source=src,
+            center_freq=7_100_000,
+        )
+        session._stream_task = asyncio.current_task()
+        try:
+            applied = await session.set_frequency(7_200_000)
+            # Source returned False → falls through to legacy path which
+            # updates center_freq unconditionally on a change.
+            assert applied
+            assert src.calls == [7_200_000]  # was called, but rejected
+            assert session.center_freq == 7_200_000
+        finally:
+            session._stream_task = None
+
+    async def test_unstarted_session_skips_source_retune(self) -> None:
+        """Pre-start: the source's set_runtime_frequency is NOT invoked
+        (the queue would have nothing to drain); the legacy path stores
+        the new center for spawn time."""
+        src = _StubRetunableSource()
+        session = ReceiverSession(
+            receiver_id="rx-freq-prestart",
+            source=src,
+            center_freq=14_150_000,
+        )
+        # _stream_task is None (never started).
+        applied = await session.set_frequency(21_070_000)
+        assert applied
+        assert src.calls == []  # not invoked
+        assert session.center_freq == 21_070_000
+
+    async def test_negative_frequency_rejected(self) -> None:
+        src = _StubRetunableSource()
+        session = ReceiverSession(
+            receiver_id="rx-freq-neg",
+            source=src,
+            center_freq=14_150_000,
+        )
+        session._stream_task = asyncio.current_task()
+        try:
+            applied = await session.set_frequency(-1)
+            assert not applied
+            assert src.calls == []
+        finally:
+            session._stream_task = None
+
+
+# ---------------------------------------------------------------------------
 # ReceiverSession.set_dsp_mode + the set_mode rebuild fix
 # ---------------------------------------------------------------------------
 

@@ -73,3 +73,9 @@ TAGS
 pycsdr-build/
 csdr-build/
 env-artifacts/
+
+# --- Agent working artifacts (not part of the project) ---
+skills/
+tool-results/
+upload/
+

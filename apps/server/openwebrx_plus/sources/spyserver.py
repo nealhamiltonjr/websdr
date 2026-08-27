@@ -262,6 +262,15 @@ class SpyServerSource:
     _gain_q: asyncio.Queue[float | None] = field(
         default_factory=lambda: asyncio.Queue(maxsize=1), init=False, repr=False
     )
+    # Runtime center-frequency channel (slice-15) — same pattern as
+    # ``_gain_q``: latest-wins, applied between chunks via
+    # ``COMMAND_SET_IQ_FREQUENCY``. Empty (drained) by spawn() on entry
+    # so a pre-spawn ``set_runtime_frequency`` call queues the new
+    # frequency for immediate dispatch on connect alongside the initial
+    # ``_CMD_SET_IQ_FREQUENCY`` send.
+    _freq_q: asyncio.Queue[int] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=1), init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if not self.host:
@@ -493,6 +502,26 @@ class SpyServerSource:
                         endpoint=f"{self.host}:{self.port}",
                         gain=req,
                     )
+                # Runtime frequency requests (slice-15): latest-wins,
+                # applied between chunks via COMMAND_SET_IQ_FREQUENCY.
+                # The remote sends a SYNC ack (per the fake-server spec)
+                # but we don't wait for it — the next IQ frame will
+                # already be at the new center.
+                while True:
+                    try:
+                        hz = self._freq_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    self._command(
+                        writer, _CMD_SET_IQ_FREQUENCY,
+                        struct.pack("<q", int(hz)),
+                    )
+                    await writer.drain()
+                    log.info(
+                        "spyserver runtime tune forwarded",
+                        endpoint=f"{self.host}:{self.port}",
+                        center_freq=hz,
+                    )
                 try:
                     msg_type, stream_type, _user, body = await self._read_message(
                         reader
@@ -539,6 +568,26 @@ class SpyServerSource:
         with contextlib.suppress(asyncio.QueueEmpty):
             self._gain_q.get_nowait()
         self._gain_q.put_nowait(None if gain_db is None else float(gain_db))
+        return True
+
+    def set_runtime_frequency(self, hz: int) -> bool:
+        """Queue a runtime center-frequency change (slice-15).
+
+        Forwards a ``COMMAND_SET_IQ_FREQUENCY`` mid-stream so the remote
+        SpyServer physically retunes its SDR to the new frequency. The
+        next IQ frame is centered on ``hz``, the local Shift block goes
+        back to 0 offset, and the ReceiverSession emits a metadata frame
+        so the frontend's frequency axis re-renders.
+
+        Returns True (always queueable — even before the stream starts,
+        the value applies right after connect alongside the initial
+        ``COMMAND_SET_IQ_FREQUENCY`` send).
+        """
+        if hz <= 0:
+            return False
+        with contextlib.suppress(asyncio.QueueEmpty):
+            self._freq_q.get_nowait()
+        self._freq_q.put_nowait(int(hz))
         return True
 
     async def close(self) -> None:

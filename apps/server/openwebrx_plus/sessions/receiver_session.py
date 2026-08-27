@@ -460,8 +460,12 @@ class ReceiverSession:
     async def set_frequency(self, freq: int) -> bool:
         """Handle a setFrequency control command. Returns True if applied.
 
-        Display sessions forward the tune to the remote demodulator; local
-        sessions keep the legacy behavior (move the session center).
+        Display sessions forward the tune to the remote demodulator; raw-IQ
+        sources that implement ``set_runtime_frequency`` (slice-15 —
+        SpyServer, rtl_tcp, USB drivers) ask the SDR to physically recenter
+        on the new frequency; everything else keeps the legacy behavior of
+        moving only the session ``center_freq`` (the local Shift block
+        performs offset-demod against the still-original IQ stream).
         """
         if freq <= 0:
             return False
@@ -469,6 +473,27 @@ class ReceiverSession:
         if callable(tune):
             await tune(freq)
             return True
+        # Slice-15: prefer runtime-frequency forwarding to the source when
+        # the source can physically retune. This recenter both the IQ
+        # stream AND the metadata the frontend uses to label the axis.
+        # The local AudioChain's Shift block is built with offset=0
+        # (see _build_audio_chain), so once the source retunes the
+        # demodulator naturally picks up the new center freq — no Shift
+        # adjustment needed.
+        apply_freq = getattr(self.source, "set_runtime_frequency", None)
+        if callable(apply_freq) and self._stream_task is not None:
+            applied = apply_freq(int(freq))
+            if applied:
+                if freq != self.center_freq:
+                    log.info(
+                        "setFrequency (source-retuned)",
+                        receiver_id=self.receiver_id,
+                        old=self.center_freq,
+                        new=freq,
+                        source_type=self.source.info.type,
+                    )
+                    self.center_freq = int(freq)
+                return True
         if freq != self.center_freq:
             log.info(
                 "setFrequency",

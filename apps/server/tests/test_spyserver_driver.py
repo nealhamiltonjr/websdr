@@ -354,6 +354,66 @@ class TestSpyServerStream:
                 await gen.aclose()
             await server.stop()
 
+    async def test_runtime_frequency_forwards_set_iq_frequency(self) -> None:
+        """Slice-15: set_runtime_frequency queues + dispatches a
+        COMMAND_SET_IQ_FREQUENCY mid-stream (latest-wins).
+        """
+        server = FakeSpyServer(frame_samples=128)
+        await server.start()
+        gen: Any = None
+        try:
+            src = SpyServerSource(host="127.0.0.1", port=server.port, chunk_size=128)
+            gen = src.spawn(center_freq=14_150_000, sample_rate=768_000)
+            await asyncio.wait_for(gen.__anext__(), timeout=5.0)
+
+            # Queue two retunes; only the latest should land on the wire.
+            assert src.set_runtime_frequency(14_200_000) is True
+            assert src.set_runtime_frequency(7_100_000) is True  # latest wins
+            await asyncio.wait_for(gen.__anext__(), timeout=5.0)
+            await asyncio.sleep(0.25)
+
+            freqs = server.command_bodies(CMD_SET_IQ_FREQUENCY)
+            # The initial connect also sends one — at least 2 now:
+            # (a) initial center=14_150_000, (b) runtime retune=7_100_000.
+            assert struct.pack("<q", 7_100_000) in freqs
+            assert struct.pack("<q", 14_200_000) not in freqs
+        finally:
+            if gen is not None:
+                await gen.aclose()
+            await server.stop()
+
+    async def test_runtime_frequency_rejects_non_positive(self) -> None:
+        """Negative or zero hz is rejected without touching the queue."""
+        src = SpyServerSource(host="sdr.example.com", port=5555)
+        assert src.set_runtime_frequency(0) is False
+        assert src.set_runtime_frequency(-1_000) is False
+        # Queue must be empty (no spurious COMMAND_SET_IQ_FREQUENCY on
+        # the next spawn that would override the explicit center).
+        assert src._freq_q.empty()
+
+    async def test_runtime_frequency_pre_spawn_queues_for_connect(self) -> None:
+        """A pre-spawn set_runtime_frequency queues the new center for
+        immediate dispatch on connect — same protocol as runtime gain."""
+        server = FakeSpyServer(frame_samples=128)
+        await server.start()
+        gen: Any = None
+        try:
+            src = SpyServerSource(host="127.0.0.1", port=server.port, chunk_size=128)
+            # Pre-spawn: queue a different center than the spawn arg.
+            assert src.set_runtime_frequency(21_070_000) is True
+            gen = src.spawn(center_freq=14_150_000, sample_rate=768_000)
+            await asyncio.wait_for(gen.__anext__(), timeout=5.0)
+            await asyncio.sleep(0.25)
+            # The runtime queue is drained at the top of the first loop
+            # iteration, so COMMAND_SET_IQ_FREQUENCY(21_070_000) lands
+            # alongside the initial configure block.
+            freqs = server.command_bodies(CMD_SET_IQ_FREQUENCY)
+            assert struct.pack("<q", 21_070_000) in freqs
+        finally:
+            if gen is not None:
+                await gen.aclose()
+            await server.stop()
+
     async def test_server_bye_refuses_session(self) -> None:
         server = FakeSpyServer(refuse_reason="protocol version too old")
         await server.start()

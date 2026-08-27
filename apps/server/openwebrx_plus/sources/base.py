@@ -146,6 +146,37 @@ class RuntimeGainSource(Protocol):
     def set_runtime_gain(self, gain_db: float | None) -> bool: ...
 
 
+@runtime_checkable
+class RuntimeFrequencySource(Protocol):
+    """A Source whose center frequency can be re-tuned WHILE STREAMING
+    (slice-15 — SpyServer polish; covers rtl_tcp + USB drivers too).
+
+    Optional companion to ``Source`` — detected via ``hasattr`` by the
+    ReceiverSession when a ``setFrequency`` control command arrives, BEFORE
+    falling back to the legacy ``self.center_freq = freq`` metadata-only
+    update (which leaves the actual IQ stream centered on the original
+    frequency and the local Shift block does offset-demod).
+
+    Sources that implement this protocol tell the underlying SDR (or the
+    remote SpyServer / rtl_tcp server) to physically recenter the stream
+    on the new frequency. The ReceiverSession, on a True return, updates
+    its ``center_freq`` to match and emits a metadata frame so the
+    frontend's frequency axis re-renders around the new center.
+
+    Implementations MUST be safe to call from any asyncio task while the
+    spawn() generator is being consumed (assignment of an atomic field or
+    a queue put — never blocking I/O on the hot path).
+
+    Semantics:
+      - ``hz`` integer → request the source recenter on that frequency.
+      - Returns True if the request was applied (or queued for the stream
+        loop); False when the source can't honor it right now (e.g. file
+        replay, simulated, or a driver whose handle isn't live yet).
+    """
+
+    def set_runtime_frequency(self, hz: int) -> bool: ...
+
+
 # ---------------------------------------------------------------------------
 # Display-stream sources (ADR-006 federation client)
 # ---------------------------------------------------------------------------
