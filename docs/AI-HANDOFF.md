@@ -1,6 +1,6 @@
 # OpenWebRX+ — Complete Project Handoff (for an AI continuing this work)
 
-**Snapshot date:** 2026-08-27 · **State:** post slice-4.9 · **All quality gates green**
+**Snapshot date:** 2026-08-28 · **State:** post slice-14 · **All quality gates green**
 
 This document is the single entry point for an AI (or human) picking this project
 up cold. It explains what the project is, the tech stack, exactly where
