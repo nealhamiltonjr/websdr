@@ -172,3 +172,43 @@ class TestAirspyDriver:
     def test_invalid_gain_mode_rejected(self) -> None:
         with pytest.raises(ValueError, match="invalid gain_mode"):
             AirspySource(gain_mode="magic")
+
+    # ---- slice-6.5: runtime gain -------------------------------------------------
+
+    async def test_runtime_gain_returns_false_when_not_streaming(self) -> None:
+        """A fresh source (never spawned) must reject runtime gain."""
+        src = AirspySource(binding=FakeAirspyBinding())
+        assert src.set_runtime_gain(10.0) is False
+        assert src.set_runtime_gain(None) is False
+
+    async def test_runtime_gain_applied_while_streaming(self) -> None:
+        """set_runtime_gain(15) while streaming → binding.set_gains called
+        with linearity=15 (overriding the spawn-time linearity_gain)."""
+        binding = FakeAirspyBinding()
+        # Spawn-time linearity=5; runtime gain should override to 15.
+        src = AirspySource(binding=binding, chunk_size=256, linearity_gain=5)
+        gen = src.spawn(100_000_000, 2_500_000, None)
+        try:
+            await gen.__anext__()  # start the stream
+            # The spawn-time gains call set linearity=5.
+            spawn_gains = [c for c in binding.calls if c[0] == "gains"]
+            assert spawn_gains[-1][1]["linearity"] == 5
+            # Apply a runtime gain change to 15.
+            ok = src.set_runtime_gain(15.0)
+            assert ok is True
+            # The LAST gains call must reflect the runtime gain (linearity=15).
+            gains_calls = [c for c in binding.calls if c[0] == "gains"]
+            assert len(gains_calls) >= 2
+            last_gains = gains_calls[-1][1]
+            assert last_gains["gain_mode"] == "linearity"
+            assert last_gains["linearity"] == 15
+        finally:
+            await gen.aclose()
+
+    async def test_runtime_gain_returns_false_after_close(self) -> None:
+        """After spawn() returns (close), the handle is gone → False."""
+        binding = FakeAirspyBinding()
+        src = AirspySource(binding=binding, chunk_size=256)
+        await _collect(src, 1)
+        # Stream is closed now; handle cleared.
+        assert src.set_runtime_gain(10.0) is False

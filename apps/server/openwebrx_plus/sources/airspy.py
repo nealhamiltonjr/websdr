@@ -285,6 +285,12 @@ class AirspySource:
             )
         if isinstance(self.serial_number, str) and self.serial_number.isdigit():
             self.serial_number = int(self.serial_number)
+        # Slice-6.5: runtime-gain handle storage. Set in spawn(), cleared
+        # in the finally block. Used by set_runtime_gain() to apply a
+        # gain change while streaming (the device handle stays open
+        # between spawn() and close()).
+        self._binding_inst: Any = None
+        self._dev: Any = None
 
     def _make_binding(self) -> Any:
         if self.binding is not None:
@@ -311,6 +317,12 @@ class AirspySource:
         dev = binding.open(serial)
         bridge = AsyncIqBridge(max_blocks=32)
         running = threading.Event()
+
+        # Slice-6.5: stash handles so set_runtime_gain() can apply changes
+        # while the stream loop runs (calls libairspy from any task —
+        # standard practice for USB SDRs, flagged for first-live check).
+        self._binding_inst = binding
+        self._dev = dev
 
         def on_samples(raw: bytes) -> None:
             bridge.push(np.frombuffer(raw, dtype=np.int16).copy())
@@ -379,6 +391,51 @@ class AirspySource:
                 except Exception:  # noqa: BLE001 — teardown best-effort
                     log.debug("airspy stop_rx raised", exc_info=True)
             binding.close(dev)
+            # Slice-6.5: clear the runtime-gain handles so a post-close
+            # set_runtime_gain() returns False (not silently a no-op).
+            self._binding_inst = None
+            self._dev = None
 
     async def close(self) -> None:
         return None
+
+    def set_runtime_gain(self, gain_db: float | None) -> bool:
+        """Apply a gain change while streaming (slice-6.5 RuntimeGainSource).
+
+        - ``gain_db`` numeric: composite linearity gain = round(gain_db)
+          (range 0-21 per Airspy spec; values outside that range clip).
+        - ``None``: enable LNA + mixer AGC (Airspy's hardware auto-gain).
+
+        Returns True when applied; False when the device handle isn't
+        live (between close and respawn, or never opened). Called from
+        any asyncio task while spawn() is being consumed — libairspy
+        gain calls are safe concurrent with the USB reader thread
+        (standard practice; flagged for first-live-connection check).
+        """
+        binding = self._binding_inst
+        dev = self._dev
+        if binding is None or dev is None:
+            return False
+        if gain_db is None:
+            # AGC: enable both LNA and mixer AGC stages.
+            try:
+                binding._lib.airspy_set_lna_agc(dev, 1)
+                binding._lib.airspy_set_mixer_agc(dev, 1)
+                return True
+            except Exception:  # noqa: BLE001
+                log.debug("airspy AGC set failed", exc_info=True)
+                return False
+        try:
+            binding.set_gains(
+                dev,
+                gain_mode="linearity" if self.gain_mode != "manual" else "manual",
+                linearity=int(max(0, min(21, round(gain_db)))),
+                sensitivity=int(max(0, min(21, round(gain_db)))),
+                lna=self.lna_gain,
+                mixer=self.mixer_gain,
+                vga=self.vga_gain,
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            log.debug("airspy set_gains failed", exc_info=True)
+            return False

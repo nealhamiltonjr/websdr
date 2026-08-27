@@ -300,6 +300,11 @@ class SDRplaySource:
     def __post_init__(self) -> None:
         if self.antenna not in ("a", "b", "c"):
             raise ValueError(f"invalid antenna {self.antenna!r}; expected a|b|c")
+        # Slice-6.5: runtime-gain handle storage. Set in spawn(), cleared
+        # in the finally block. SDRplay uses a SINGLE binding instance
+        # (not a per-device handle like Airspy/Soapy) — we stash the
+        # binding itself so set_runtime_gain() can call its methods.
+        self._binding_inst: Any = None
 
     def _make_binding(self) -> Any:
         if self.binding is not None:
@@ -346,6 +351,11 @@ class SDRplaySource:
             bridge.push(interleaved)
 
         binding.select_device(chosen["dev_num"])
+        # Slice-6.5: stash the binding for set_runtime_gain() (the
+        # SDRplay gain API is gain_change_request(grdb, lna_state) +
+        # agc_control(enable); both safe concurrent with the stream
+        # callback per the SDRplay API contract).
+        self._binding_inst = binding
         try:
             if self.agc:
                 binding.agc_control(True)
@@ -402,6 +412,39 @@ class SDRplaySource:
                 except Exception:  # noqa: BLE001 — teardown best-effort
                     log.debug("sdrplay stream_uninit raised", exc_info=True)
             binding.release_device()
+            # Slice-6.5: clear the runtime-gain handle so a post-close
+            # set_runtime_gain() returns False.
+            self._binding_inst = None
 
     async def close(self) -> None:
         return None
+
+    def set_runtime_gain(self, gain_db: float | None) -> bool:
+        """Apply a gain change while streaming (slice-6.5 RuntimeGainSource).
+
+        - ``gain_db`` numeric: mapped to SDRplay's ``grdb`` (gain reduction
+          dB) via the standard convention ``grdb = 59 - gain_db`` (clamped
+          to the supported 20-59 range). LNA state stays at the spawn-time
+          value — adjusting LNA at runtime requires hardware-specific
+          heuristics that belong in a future slice.
+        - ``None``: enable SDRplay's AGC (its hardware auto-gain).
+
+        Returns True when applied; False when the binding isn't live
+        (between close and respawn, or never opened). Safe to call from
+        any asyncio task while spawn() is being consumed (the gain_change
+        API is non-blocking and safe concurrent with the stream callback).
+        """
+        binding = self._binding_inst
+        if binding is None:
+            return False
+        try:
+            if gain_db is None:
+                binding.agc_control(True)
+                return True
+            binding.agc_control(False)
+            grdb = max(20, min(59, 59 - int(round(gain_db))))
+            binding.gain_change_request(grdb, self.lna_state)
+            return True
+        except Exception:  # noqa: BLE001
+            log.debug("sdrplay runtime gain failed", exc_info=True)
+            return False

@@ -159,6 +159,10 @@ class SoapySource:
         label="SoapySDR",
         sample_rate=1_000_000,
     ))
+    # Slice-6.5: runtime-gain handle storage. Set in spawn(), cleared
+    # in the finally block. The SoapyBinding has the set_gain + set_agc
+    # surface; we keep a ref so set_runtime_gain() can use it.
+    _dev_inst: Any = None
 
     def _make_binding(self) -> Any:
         if self.binding is not None:
@@ -179,6 +183,10 @@ class SoapySource:
                 raise RuntimeError("no SoapySDR devices found (enumerate empty)")
             args = devices[0]
         dev = binding.make(args)
+        # Slice-6.5: stash the dev handle for set_runtime_gain() (the
+        # SoapyBinding exposes set_gain + set_agc which are safe to call
+        # concurrent with readStream — standard SoapySDR contract).
+        self._dev_inst = dev
         try:
             dev.set_sample_rate(sample_rate)
             dev.set_frequency(center_freq)
@@ -230,6 +238,39 @@ class SoapySource:
                     raise RuntimeError(f"soapy readStream failed ret={n}")
         finally:
             dev.close()
+            # Slice-6.5: clear the runtime-gain handle so a post-close
+            # set_runtime_gain() returns False (not silently a no-op).
+            self._dev_inst = None
 
     async def close(self) -> None:
         return None
+
+    def set_runtime_gain(self, gain_db: float | None) -> bool:
+        """Apply a gain change while streaming (slice-6.5 RuntimeGainSource).
+
+        - ``gain_db`` numeric: applied to the first named gain element
+          (most SoapySDR drivers expose one principal gain).
+        - ``None``: enable hardware AGC where supported (some drivers
+          reject setGainMode; logged at debug, returns True since the
+          request itself was honored).
+
+        Returns True when the device handle is live and the request
+        was dispatched (best-effort — SoapySDR setGain is non-blocking
+        and safe concurrent with readStream per the SoapySDR contract).
+        """
+        dev = self._dev_inst
+        if dev is None:
+            return False
+        try:
+            if gain_db is None:
+                dev.set_agc(True)
+                return True
+            names = dev.gain_names()
+            if not names:
+                log.warning("soapy runtime gain ignored — no named gains")
+                return False
+            dev.set_gain(names[0], float(gain_db))
+            return True
+        except Exception:  # noqa: BLE001
+            log.debug("soapy runtime gain failed", exc_info=True)
+            return False

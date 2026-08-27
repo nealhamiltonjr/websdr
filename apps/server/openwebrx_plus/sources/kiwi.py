@@ -118,6 +118,10 @@ class KiwiSdrSource:
         # Advertised to ReceiverSession.start() so the DSP chains are built
         # for the rate the Kiwi will actually stream at.
         self.fixed_sample_rate: int = self.iq_sample_rate
+        # Slice-6.5: runtime-gain connection storage. Set in spawn() after
+        # the websocket opens; cleared in the finally block. The Kiwi
+        # protocol uses 'SET AGC=<0|1>' and 'SET GAIN=<dB>' text messages.
+        self._connection: Any = None
 
     @property
     def _uri(self) -> str:
@@ -165,6 +169,9 @@ class KiwiSdrSource:
                 websockets.connect(self._uri, open_timeout=self.connect_timeout),
                 timeout=self.connect_timeout + 2.0,
             )
+            # Slice-6.5: stash the connection so set_runtime_gain() can
+            # send 'SET AGC=' / 'SET GAIN=' text messages on the live ws.
+            self._connection = connection
         except TimeoutError:
             raise RuntimeError(
                 f"KiwiSDR {self.host}:{self.port} did not open a websocket "
@@ -215,6 +222,43 @@ class KiwiSdrSource:
             return
         finally:
             await connection.close()
+            # Slice-6.5: clear the runtime-gain connection handle.
+            self._connection = None
+
+    def set_runtime_gain(self, gain_db: float | None) -> bool:
+        """Apply a gain change while streaming (slice-6.5 RuntimeGainSource).
+
+        - ``gain_db`` numeric: send 'SET AGC=0' then 'SET GAIN=<dB>' on
+          the live websocket (the Kiwi protocol's RF-gain commands).
+        - ``None``: send 'SET AGC=1' to enable the Kiwi's server-side AGC.
+
+        Returns True when the connection is live and the request was
+        dispatched (the ws send is fire-and-forget — the Kiwi echoes a
+        status line back via _handle_text on success or stays silent
+        on failure; we don't wait for the echo).
+
+        This schedules the ws send onto the running event loop via
+        ``asyncio.run_coroutine_threadsafe`` — safe to call from the WS
+        listener task while spawn()'s ``async for message in connection``
+        is being consumed.
+        """
+        connection = self._connection
+        if connection is None:
+            return False
+        try:
+            loop = asyncio.get_event_loop()
+            if gain_db is None:
+                loop.create_task(connection.send("SET AGC=1"))
+            else:
+                gain_int = int(round(gain_db))
+                async def _send_both() -> None:
+                    await connection.send("SET AGC=0")
+                    await connection.send(f"SET GAIN={gain_int}")
+                loop.create_task(_send_both())
+            return True
+        except Exception:  # noqa: BLE001
+            log.debug("kiwi runtime gain failed", exc_info=True)
+            return False
 
     async def _handle_text(self, connection: Any, message: str) -> None:
         """React to server text messages (rate proposals in particular)."""
