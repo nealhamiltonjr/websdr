@@ -1,10 +1,12 @@
 """Plugins module — decoder plugin SDK + registry (ADR-003).
 
 Importing this package registers the bundled decoders: the in-process
-ADS-B plugin and the subprocess dump1090 plugin (slice-4.9).
+ADS-B plugin, the subprocess dump1090 plugin (slice-4.9), and the
+in-process AIS plugin (slice-6.4).
 """
 
 from .adsb import AdsbDecoderPlugin  # noqa: F401  (registers itself)
+from .ais import AisDecoderPlugin  # noqa: F401  (registers itself)
 from .base import (  # noqa: F401
     DecoderAlreadyAttached,
     DecoderAttachContext,
@@ -25,6 +27,7 @@ from .subprocess import (  # noqa: F401
 
 __all__ = [
     "AdsbDecoderPlugin",
+    "AisDecoderPlugin",
     "DecoderAlreadyAttached",
     "DecoderAttachContext",
     "DecoderAttachError",

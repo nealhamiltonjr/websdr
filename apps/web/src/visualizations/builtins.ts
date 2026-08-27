@@ -21,5 +21,6 @@ import './SpectrumViz';
 import './SMeterViz';
 import './FrequencyCounterViz';
 import './AircraftListViz';
+import './VesselListViz';
 
 export { getViz, listViz } from './registry';

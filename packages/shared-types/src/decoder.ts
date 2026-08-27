@@ -106,3 +106,91 @@ export function isAdsbFrameEvent(
     adsbDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'frame'
   );
 }
+
+// ============================================================================
+// AIS (Marine) — slice-6.4 (in-process AIS decoder plugin)
+//
+// The AIS plugin emits the same envelope schema as ADS-B but with
+// `decoder: "ais"` and `kind: "vessel"` (instead of "aircraft"). The
+// events pair exactly with the AIS-side plugin (apps/server/
+// openwebrx_plus/plugins/ais.py) which decodes ITU-R M.1371-5 messages.
+// ============================================================================
+
+/** Decoder names that emit AIS-family wire events. */
+export const AIS_DECODERS = ['ais'] as const;
+export type AisDecoderName = (typeof AIS_DECODERS)[number];
+
+/** AIS "frame" event — one CRC-verified AIS message (see plugins/ais.py). */
+export interface AisFrameEvent {
+  kind: 'frame';
+  ts: number;
+  /** ITU-R M.1371-5 message type (1-3 = Class A position, 4 = base station,
+   * 5 = static & voyage, 18 = Class B position, 21 = aid-to-nav, etc.). */
+  type: number;
+  /** Maritime Mobile Service Identity — 9-digit unique ship ID. */
+  mmsi: string;
+  /** Full message payload hex (UNSTUFFED, pre-CRC) — for raw display. */
+  raw: string;
+  rssi_dbfs: number;
+  /** Optional fields populated per message type. */
+  speed_kn?: number;
+  longitude?: number;
+  latitude?: number;
+  course_deg?: number;
+  heading_deg?: number;
+  timestamp_sec?: number;
+  vessel_name?: string;
+  callsign?: string;
+  imo?: number;
+  destination?: string;
+  nav_status?: number;
+  ship_type?: number;
+}
+
+/** One vessel row in an AIS "vessel" snapshot event. */
+export interface AisVesselRow {
+  mmsi: string;
+  /** Last message type received for this vessel (1-3, 4, 5, 18, 21). */
+  type: number;
+  vessel_name: string | null;
+  callsign: string | null;
+  imo: number | null;
+  ship_type: number | null;
+  speed_kn: number | null;
+  longitude: number | null;
+  latitude: number | null;
+  course_deg: number | null;
+  heading_deg: number | null;
+  nav_status: number | null;
+  destination: string | null;
+  frames: number;
+  last_seen: number;
+  rssi_dbfs: number;
+}
+
+/** AIS "vessel" event — full table snapshot, newest first. */
+export interface AisVesselEvent {
+  kind: 'vessel';
+  ts: number;
+  vessels: AisVesselRow[];
+}
+
+const aisDecoderNames: readonly string[] = AIS_DECODERS;
+
+/** Type guard: this decoder event is an AIS vessel snapshot. */
+export function isAisVesselEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AisVesselEvent } {
+  return (
+    aisDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'vessel'
+  );
+}
+
+/** Type guard: this decoder event is an AIS frame. */
+export function isAisFrameEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AisFrameEvent } {
+  return (
+    aisDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'frame'
+  );
+}
