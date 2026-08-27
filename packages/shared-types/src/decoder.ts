@@ -17,12 +17,14 @@
 
 /** Decoder names that emit ADS-B-family wire events.
  *
- *  Both the in-process "adsb" plugin and the subprocess "dump1090"
- *  plugin emit the same frame/aircraft event schema — the aircraft table
- *  viz consumes either. The subprocess plugin additionally emits
- *  decoder_state lifecycle events and rows carrying position fields.
+ *  The in-process "adsb" plugin, the subprocess "dump1090" plugin, AND
+ *  the in-process "dump978" UAT plugin all emit the same frame/aircraft
+ *  event schema — the aircraft table viz consumes any of them. The
+ *  subprocess plugin additionally emits decoder_state lifecycle events
+ *  and rows carrying position fields (CPR); the dump978 plugin v1
+ *  emits the same fields when the message carries them.
  */
-export const ADSB_DECODERS = ['adsb', 'dump1090'] as const;
+export const ADSB_DECODERS = ['adsb', 'dump1090', 'dump978'] as const;
 export type AdsbDecoderName = (typeof ADSB_DECODERS)[number];
 
 /** Envelope for every decoder event arriving over the WebSocket. */
