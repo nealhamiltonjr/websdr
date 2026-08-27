@@ -39,7 +39,7 @@ import numpy as np
 import structlog
 
 from ..config import Settings
-from ..dsp import AudioChain, FftChain
+from ..dsp import AudioChain, DSPParams, FftChain
 from ..plugins.base import (
     DecoderAlreadyAttached,
     DecoderAttachContext,
@@ -115,6 +115,11 @@ class ReceiverSession:
     # (DC block / deemphasis / limiter). "ai"/"cascade" pending the
     # DeepFilterNet module — see DSP_MODES above.
     dsp_mode: str = "classic"
+    # Slice-5.2 fine-grained DSP controls. When any field is non-None,
+    # the AudioChain rebuilds with the optional blocks (Agc/Squelch/Gain/
+    # NfmDeemphasis/manual bandpass). Changes via set_dsp_params() merge
+    # into this struct and trigger a chain rebuild.
+    dsp_params: DSPParams = field(default_factory=DSPParams)
     fft_size: int = 1024
     fft_fps: int = 10
     min_db: float = -100.0
@@ -188,13 +193,14 @@ class ReceiverSession:
         self._stream_task = asyncio.create_task(self._run())
 
     def _build_audio_chain(self) -> AudioChain:
-        """Construct an AudioChain for the CURRENT mode + dsp_mode."""
+        """Construct an AudioChain for the CURRENT mode + dsp_mode + dsp_params."""
         return AudioChain(
             mode=self.mode,  # type: ignore[arg-type]
             input_rate=self.sample_rate,
             output_rate=AUDIO_SAMPLE_RATE,
             channel_offset_hz=0.0,
             conditioning=(self.dsp_mode == "classic"),
+            dsp_params=self.dsp_params,
         )
 
     async def stop(self) -> None:
@@ -522,6 +528,33 @@ class ReceiverSession:
             self.dsp_mode = mode
             await self._rebuild_audio_chain()
             return True, ""
+        return True, ""
+
+    async def set_dsp_params(self, patch: DSPParams) -> tuple[bool, str]:
+        """Merge fine-grained DSP params into the session and rebuild the
+        AudioChain if any field actually changed (slice-5.2).
+
+        The patch is a partial update — only non-None fields override the
+        corresponding fields on the session's current dsp_params. Setting
+        a field back to None (the "use mode default" state) requires the
+        caller to send an explicit ``None`` value; pydantic-validated WS
+        payloads treat missing fields as "unchanged".
+
+        Returns (applied, reason) like set_gain — when applied is False,
+        reason carries the human-readable rejection message.
+        """
+        if hasattr(self.source, "display_stream"):
+            return False, "the remote receiver runs its own DSP chain"
+        new_params = self.dsp_params.merge(patch)
+        if new_params.to_dict() == self.dsp_params.to_dict():
+            return True, ""  # no-op
+        log.info(
+            "setDSPParams",
+            receiver_id=self.receiver_id,
+            patch=patch.to_dict(),
+        )
+        self.dsp_params = new_params
+        await self._rebuild_audio_chain()
         return True, ""
 
     async def _rebuild_audio_chain(self) -> None:

@@ -86,6 +86,11 @@ def register_websocket_routes(app: FastAPI) -> None:
                                 "mode": session.mode,
                                 "gain": session.gain,
                                 "dspMode": session.dsp_mode,
+                                # Slice-5.2: fine-grained DSP params echoed
+                                # so the frontend DSPControls panel can show
+                                # the current state (vs. just the optimistic
+                                # local value).
+                                "dspParams": session.dsp_params.to_dict(),
                                 "source": {
                                     "type": session.source.info.type,
                                     "label": session.source.info.label,
@@ -167,6 +172,40 @@ def register_websocket_routes(app: FastAPI) -> None:
                                     {
                                         "type": "error",
                                         "command": "setDSPMode",
+                                        "receiverId": receiver_id,
+                                        "message": reason,
+                                    }
+                                )
+                            )
+                    elif cmd == "setDSPParams":
+                        # Slice-5.2: fine-grained DSP controls. The patch
+                        # is a flat object with the optional fields from
+                        # DSPParams; unknown fields are ignored by
+                        # DSPParams.from_dict (so future fields don't
+                        # crash older servers).
+                        patch_dict = data.get("value")
+                        if not isinstance(patch_dict, dict):
+                            await websocket.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "command": "setDSPParams",
+                                        "receiverId": receiver_id,
+                                        "message": "value must be an object",
+                                    }
+                                )
+                            )
+                            continue
+                        from ..dsp.types import DSPParams as _DSPParams
+
+                        patch = _DSPParams.from_dict(patch_dict)
+                        applied, reason = await session.set_dsp_params(patch)
+                        if not applied:
+                            await websocket.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "command": "setDSPParams",
                                         "receiverId": receiver_id,
                                         "message": reason,
                                     }

@@ -7,9 +7,11 @@ Wire topology (mode-dependent)::
             → Shift(rate=offset/sample_rate)        # tune to channel center
             → Bandpass(low, high, transition)       # channel filter
             → demod (AmDemod | FmDemod | PhaseDemod)
-            → [DcBlock | WfmDeemphasis]             # classic only (raw skips)
+            → [Squelch]                             # slice-5.2 (optional)
+            → [DcBlock | WfmDeemphasis | NfmDeemphasis]  # classic only
+            → [Agc | Gain]                          # slice-5.2 (optional)
             → AudioResampler(in_rate, out_rate)      # → 8 kHz
-            → [Limit(maxAmplitude=1.0)]              # classic only
+            → [Limit(maxAmplitude=1.0)]              # classic only (when AGC off)
             → Convert(FLOAT → SHORT)                  # → int16 PCM
             → out_buf (SHORT)
 
@@ -18,6 +20,8 @@ Wire topology (mode-dependent)::
             → Shift(rate=offset/sample_rate)
             → Bandpass(low, high, transition)        # SSB filter ~2.7 kHz
             → RealPart()                              # collapse complex → real
+            → [Squelch]                              # slice-5.2 (optional)
+            → [Agc | Gain]                           # slice-5.2 (optional)
             → AudioResampler(in_rate, out_rate)
             → Convert(FLOAT → SHORT)
             → out_buf (SHORT)
@@ -32,6 +36,19 @@ DSP modes (ADR-002, slice-4.7):
         overdriven signals — that's the point). For SSB/CW the two modes
         are structurally identical (RealPart is the demodulator, not a
         conditioning stage).
+
+Slice-5.2 fine-grained controls (DSPParams):
+    The chain accepts an optional dsp_params struct that wires in
+    additional stages when their corresponding fields are set. See
+    `dsp/types.py:DSPParams` for the field-by-field contract.
+    - low_cut_hz / high_cut_hz override the mode profile's bandpass cuts
+    - agc_enabled inserts an Agc block (replaces the soft Limit when on)
+    - squelch_db inserts a Squelch block after the demod
+    - dc_block_enabled=False skips the DcBlock stage (overrides classic)
+    - deemphasis_enabled inserts NfmDeemphasis on NFM (WFM keeps it)
+    - manual_gain_db inserts a Gain block before the resampler
+    - notch_* and noise_blanker_* are accepted but no-op until slice-5.3
+      (pycsdr has no native Notch / Nb block; queued for custom impl)
 
 The receiver session pushes complex64 IQ bytes via :meth:`feed`; ready
 audio frames are drained via :meth:`drain` (non-blocking).
@@ -57,6 +74,7 @@ from typing import TYPE_CHECKING, Literal
 
 import structlog
 from pycsdr.modules import (
+    Agc,
     AmDemod,
     AudioResampler,
     Bandpass,
@@ -65,14 +83,17 @@ from pycsdr.modules import (
     DcBlock,
     FirDecimate,
     FmDemod,
+    Gain,
     Limit,
+    NfmDeemphasis,
     RealPart,
     Shift,
+    Squelch,
     WfmDeemphasis,
 )
 from pycsdr.types import Format
 
-from .types import AudioFrame
+from .types import AudioFrame, DSPParams
 
 if TYPE_CHECKING:
     from pycsdr.modules import BufferReader
@@ -146,6 +167,7 @@ class AudioChain:
         output_rate: int = 8000,
         channel_offset_hz: float = 0.0,
         conditioning: bool = True,
+        dsp_params: DSPParams | None = None,
     ) -> None:
         """Build the per-mode demodulation chain.
 
@@ -169,6 +191,11 @@ class AudioChain:
             conditioning stages (DcBlock / WfmDeemphasis / Limit); False
             ("raw") wires the demodulator output straight through. See the
             module docstring.
+        dsp_params
+            Slice-5.2 fine-grained controls. When provided, the chain
+            conditionally inserts Agc / Squelch / Gain / NfmDeemphasis
+            blocks based on the corresponding fields. The struct is
+            immutable; modify by rebuilding the chain with a new struct.
         """
         if mode not in _MODE_PROFILES:
             raise ValueError(f"unsupported mode {mode!r}")
@@ -180,6 +207,7 @@ class AudioChain:
         self.output_rate = output_rate
         self.channel_offset_hz = channel_offset_hz
         self.conditioning = conditioning
+        self.dsp_params = dsp_params or DSPParams()
         profile = _MODE_PROFILES[mode]
 
         # Decimation: input_rate → channel_rate. This is the single most
@@ -198,8 +226,13 @@ class AudioChain:
         shift_rate = -channel_offset_hz / input_rate
 
         # Bandpass cuts, normalized against the CHANNEL rate (post-decimation).
-        low = profile.low_cut / self.channel_rate
-        high = profile.high_cut / self.channel_rate
+        # Slice-5.2: DSPParams overrides the mode profile's defaults.
+        manual_low = self.dsp_params.low_cut_hz
+        manual_high = self.dsp_params.high_cut_hz
+        low_cut = manual_low if manual_low is not None else profile.low_cut
+        high_cut = manual_high if manual_high is not None else profile.high_cut
+        low = low_cut / self.channel_rate
+        high = high_cut / self.channel_rate
 
         # Buffers. Sizes are in SAMPLES (not bytes).
         #
@@ -273,53 +306,115 @@ class AudioChain:
         self._bandpass.setReader(self._decimated_buf.getReader())
         self._bandpass.setWriter(self._filtered_buf)
 
-        # Demod stage — always consumes complex from _filtered_buf.
+        # Stage 0.5: optional Squelch (slice-5.2). Inserted BETWEEN the
+        # bandpass and the demodulator, on the COMPLEX IQ stream — pycsdr's
+        # Squelch measures IQ power and zeros out the complex output when
+        # below threshold. (FLOAT output would be rejected; the block only
+        # accepts COMPLEX_FLOAT.) The threshold is an integer dBFS value;
+        # we cast from the float the user provides.
+        post_filtered_buf = self._filtered_buf
+        if self.dsp_params.squelch_db is not None:
+            self._squelch_buf = Buffer(Format.COMPLEX_FLOAT, mid_samples)
+            self._squelch = Squelch(
+                int(self.dsp_params.squelch_db),
+                int(self.channel_rate),
+            )
+            self._squelch.setReader(post_filtered_buf.getReader())
+            self._squelch.setWriter(self._squelch_buf)
+            post_filtered_buf = self._squelch_buf
+
+        # Demod stage — always consumes complex from post_filtered_buf.
         # ``demod_out_buf`` is where the demod result lands for the
         # resampler: with conditioning=True an intermediate stage
-        # (DcBlock / WfmDeemphasis) is inserted in between (ADR-002).
+        # (DcBlock / WfmDeemphasis / NfmDeemphasis) is inserted in between
+        # (ADR-002). Slice-5.2: DSPParams.dc_block_enabled / deemphasis_enabled
+        # can override the conditioning defaults; Agc + Gain are inserted
+        # conditionally based on the same struct.
+        # Buffers for optional stages (allocated lazily so unused stages
+        # don't waste ring memory).
+        self._agc_buf: Buffer | None = None
+        self._gain_buf: Buffer | None = None
+        self._nfm_deemph_buf: Buffer | None = None
+        self._agc: Agc | None = None
+        self._gain: Gain | None = None
+        self._nfm_deemph: NfmDeemphasis | None = None
+
+        # Stage 1: demodulator → demod_buf
         if profile.demod == "AM":
             self._demod = AmDemod()
-            self._demod.setReader(self._filtered_buf.getReader())
+            self._demod.setReader(post_filtered_buf.getReader())
             self._demod.setWriter(self._demod_buf)
-            if conditioning:
-                # DC block the AM demod output to remove carrier leak.
-                self._dc_block = DcBlock()
-                self._dc_block.setReader(self._demod_buf.getReader())
-                self._dc_block.setWriter(self._deemph_buf)
-                demod_out_buf = self._deemph_buf
-            else:
-                demod_out_buf = self._demod_buf
-        elif profile.demod == "NFM":
+            post_demod_buf = self._demod_buf
+        elif profile.demod == "NFM" or profile.demod == "WFM":
             self._demod = FmDemod()
-            self._demod.setReader(self._filtered_buf.getReader())
+            self._demod.setReader(post_filtered_buf.getReader())
             self._demod.setWriter(self._demod_buf)
-            if conditioning:
-                self._dc_block = DcBlock()
-                self._dc_block.setReader(self._demod_buf.getReader())
-                self._dc_block.setWriter(self._deemph_buf)
-                demod_out_buf = self._deemph_buf
-            else:
-                demod_out_buf = self._demod_buf
-        elif profile.demod == "WFM":
-            self._demod = FmDemod()
-            self._demod.setReader(self._filtered_buf.getReader())
-            self._demod.setWriter(self._demod_buf)
-            if conditioning:
-                # WFM: de-emphasis with 50 µs tau (European) at CHANNEL rate.
-                self._deemph = WfmDeemphasis(int(self.channel_rate), 50e-6)
-                self._deemph.setReader(self._demod_buf.getReader())
-                self._deemph.setWriter(self._deemph_buf)
-                demod_out_buf = self._deemph_buf
-            else:
-                demod_out_buf = self._demod_buf
+            post_demod_buf = self._demod_buf
         elif profile.demod == "SSB":
             # SSB/CW: collapse to real part, no DC block needed.
             self._real_part = RealPart()
-            self._real_part.setReader(self._filtered_buf.getReader())
+            self._real_part.setReader(post_filtered_buf.getReader())
             self._real_part.setWriter(self._demod_buf)
-            demod_out_buf = self._demod_buf
+            post_demod_buf = self._demod_buf
         else:  # pragma: no cover — defensive
             raise AssertionError(f"unhandled demod {profile.demod!r}")
+
+        # Stage 3: conditioning (classic only). dc_block_enabled and
+        # deemphasis_enabled override the profile defaults when set.
+        do_dc_block = (
+            conditioning
+            and profile.demod in ("AM", "NFM")
+            and (self.dsp_params.dc_block_enabled is not False)
+        )
+        do_wfm_deemph = (
+            conditioning
+            and profile.demod == "WFM"
+            and (self.dsp_params.deemphasis_enabled is not False)
+        )
+        do_nfm_deemph = (
+            conditioning
+            and profile.demod == "NFM"
+            and (self.dsp_params.deemphasis_enabled is True)
+        )
+        if do_dc_block:
+            self._dc_block = DcBlock()
+            self._dc_block.setReader(post_demod_buf.getReader())
+            self._dc_block.setWriter(self._deemph_buf)
+            post_demod_buf = self._deemph_buf
+        if do_wfm_deemph:
+            self._deemph = WfmDeemphasis(int(self.channel_rate), 50e-6)
+            self._deemph.setReader(post_demod_buf.getReader())
+            self._deemph.setWriter(self._deemph_buf)
+            post_demod_buf = self._deemph_buf
+        if do_nfm_deemph:
+            # NFM has its own de-emphasis block (slice-5.2) — rarely needed
+            # for voice channels but useful for data modes.
+            self._nfm_deemph_buf = Buffer(Format.FLOAT, mid_samples)
+            self._nfm_deemph = NfmDeemphasis(int(self.channel_rate))
+            self._nfm_deemph.setReader(post_demod_buf.getReader())
+            self._nfm_deemph.setWriter(self._nfm_deemph_buf)
+            post_demod_buf = self._nfm_deemph_buf
+
+        demod_out_buf = post_demod_buf
+
+        # Stage 4: optional Agc or Gain (slice-5.2). AGC replaces the soft
+        # Limit when active (Agc handles its own limiting). Manual Gain is
+        # applied before the resampler (linear gain, not dB).
+        # pycsdr signatures: Agc(Format), Gain(Format, gain_float).
+        if self.dsp_params.agc_enabled is True:
+            self._agc_buf = Buffer(Format.FLOAT, mid_samples)
+            self._agc = Agc(Format.FLOAT)
+            self._agc.setReader(demod_out_buf.getReader())
+            self._agc.setWriter(self._agc_buf)
+            demod_out_buf = self._agc_buf
+        elif self.dsp_params.manual_gain_db is not None:
+            # Convert dB → linear and apply a fixed gain.
+            linear_gain = 10 ** (self.dsp_params.manual_gain_db / 20.0)
+            self._gain_buf = Buffer(Format.FLOAT, mid_samples)
+            self._gain = Gain(Format.FLOAT, linear_gain)
+            self._gain.setReader(demod_out_buf.getReader())
+            self._gain.setWriter(self._gain_buf)
+            demod_out_buf = self._gain_buf
 
         # Resample channel_rate → output_rate (small ratio by design).
         self._resampler = AudioResampler(
@@ -332,8 +427,11 @@ class AudioChain:
         # Final audio path: Limit + Convert FLOAT → SHORT. The limiter is a
         # conditioning stage — raw mode converts straight from the
         # resampler (overdriven audio then clips at the int16 convert,
-        # which is exactly the "raw" contract).
-        if conditioning:
+        # which is exactly the "raw" contract). Slice-5.2: when AGC is
+        # active, the Agc block already handles limiting, so the soft
+        # Limit is skipped (would be a no-op anyway).
+        skip_limit = self.dsp_params.agc_enabled is True
+        if conditioning and not skip_limit:
             self._limited_buf = Buffer(Format.FLOAT, output_rate * 4)
             self._limit = Limit(maxAmplitude=1.0)
             self._limit.setReader(self._resampled_buf.getReader())
@@ -416,6 +514,7 @@ class AudioChain:
         # Stop the pycsdr modules (their AsyncRunner threads).
         for stage in (
             "_shift", "_fir_decimate", "_bandpass", "_demod", "_dc_block", "_deemph",
+            "_nfm_deemph", "_squelch", "_agc", "_gain",
             "_real_part", "_resampler", "_limit", "_convert",
         ):
             mod = getattr(self, stage, None)

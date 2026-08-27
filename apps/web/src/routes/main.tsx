@@ -20,6 +20,7 @@ import { TuningBar } from '../components/TuningBar';
 import { AddReceiverModal, type Section } from '../components/AddReceiverModal';
 import { SettingsPanel } from '../components/SettingsPanel';
 import { DebugPanel } from '../components/DebugPanel';
+import { DSPControls } from '../components/DSPControls';
 import { receiverRegistry, parseFFTFrame, parseAudioFrame } from '../sessions/ReceiverSession';
 import { registerTuneHandler } from '../sessions/tuneBus';
 import {
@@ -63,6 +64,12 @@ function useSharedWorker() {
   // Slice-5.1: Settings + Debugger panel visibility.
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [debugOpen, setDebugOpen] = createSignal(false);
+  // Slice-5.2: per-receiver DSP controls panel visibility.
+  const [dspControlsOpen, setDspControlsOpen] = createSignal(false);
+  // The active receiver's dsp_params, learned from metadata frames (slice-5.2).
+  const [activeDspParams, setActiveDspParams] = createSignal<
+    import('../lib/api').DSPParams | undefined
+  >(undefined);
 
   onMount(() => {
     const worker = new SharedWorker(
@@ -167,6 +174,8 @@ function useSharedWorker() {
             // Slice-4.5: every receiver's tuning is tracked (not just the
             // default's) — the TuningBar shows whichever receiver is active.
             // Slice-4.7: gain + dspMode ride the same metadata frames.
+            // Slice-5.2: dspParams (fine-grained DSP controls) ride too.
+            const dspParamsRaw = (env as { dspParams?: import('../lib/api').DSPParams }).dspParams;
             setTuning((m) =>
               applyMetadata(m, env.receiverId, {
                 frequency: meta.frequency,
@@ -177,6 +186,10 @@ function useSharedWorker() {
                 supportsAgc: !!env.source.supportsAgc,
               }),
             );
+            // Update the active receiver's dsp_params when its metadata lands.
+            if (dspParamsRaw && env.receiverId === tuning().activeId) {
+              setActiveDspParams(dspParamsRaw);
+            }
           } catch (e) {
             console.error('[main] failed to parse metadata', e);
           }
@@ -271,6 +284,21 @@ function useSharedWorker() {
     setTuning((m) => applyControl(m, rxId, { dspMode: newDspMode }));
   };
 
+  // Slice-5.2: send a setDSPParams patch via the SharedWorker. Only the
+  // active receiver is edited.
+  const sendSetDSPParams = (patch: Partial<import('../lib/api').DSPParams>) => {
+    const rxId = tuning().activeId;
+    port?.postMessage({
+      type: 'control',
+      receiverId: rxId,
+      command: 'setDSPParams',
+      value: patch,
+    });
+    // Optimistic local update so the panel reflects the change immediately;
+    // the metadata echo will confirm a frame or two later.
+    setActiveDspParams((prev) => prev ? { ...prev, ...patch } as import('../lib/api').DSPParams : prev);
+  };
+
   // Slice-4.5: select the receiver the TuningBar edits (tab click).
   const selectReceiver = (id: string) => {
     setTuning((m) => setActive(m, id));
@@ -322,6 +350,10 @@ function useSharedWorker() {
     setSettingsOpen,
     debugOpen,
     setDebugOpen,
+    dspControlsOpen,
+    setDspControlsOpen,
+    activeDspParams,
+    sendSetDSPParams,
   };
 }
 
@@ -344,16 +376,21 @@ export function MainRoute() {
     setSettingsOpen,
     debugOpen,
     setDebugOpen,
+    dspControlsOpen,
+    setDspControlsOpen,
+    activeDspParams,
+    sendSetDSPParams,
   } = useSharedWorker();
 
   // Active receiver's tuning — what the TuningBar shows/edits.
   const active = () => activeTuning(tuning());
 
-  // Escape closes whichever modal is open (settings > debug > source picker).
+  // Escape closes whichever modal is open (settings > debug > DSP > source picker).
   const onKeydown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       if (settingsOpen()) setSettingsOpen(false);
       else if (debugOpen()) setDebugOpen(false);
+      else if (dspControlsOpen()) setDspControlsOpen(false);
       else closeModal();
     }
   };
@@ -395,6 +432,15 @@ export function MainRoute() {
             title="Open the Debugger — captured logs + errors, with filters + export"
           >
             🐛 debug
+          </button>
+          {/* Slice-5.2: per-receiver DSP controls button */}
+          <button
+            type="button"
+            class="rounded bg-emerald-450/20 px-2 py-0.5 font-mono text-xs text-emerald-450 hover:bg-emerald-450/30"
+            onClick={() => setDspControlsOpen(true)}
+            title="Open the per-receiver DSP controls — bandpass width, AGC, squelch, notch (experimental), noise blanker (experimental)"
+          >
+            🌡 DSP
           </button>
           {/* Audio toggle */}
           <button
@@ -510,6 +556,16 @@ export function MainRoute() {
       {/* Slice-5.1: Debugger panel */}
       <Show when={debugOpen()}>
         <DebugPanel onClose={() => setDebugOpen(false)} />
+      </Show>
+
+      {/* Slice-5.2: per-receiver DSP controls panel */}
+      <Show when={dspControlsOpen()}>
+        <DSPControls
+          receiverId={tuning().activeId}
+          dspParams={activeDspParams()}
+          onPatch={sendSetDSPParams}
+          onClose={() => setDspControlsOpen(false)}
+        />
       </Show>
     </div>
   );

@@ -27,12 +27,13 @@ from __future__ import annotations
 
 from .audio import AudioChain, DemodMode
 from .fft import FftChain
-from .types import AudioFrame, FftFrame
+from .types import AudioFrame, DSPParams, FftFrame
 
 __all__ = [
     "AudioChain",
     "AudioFrame",
     "DemodMode",
+    "DSPParams",
     "FftChain",
     "FftFrame",
 ]

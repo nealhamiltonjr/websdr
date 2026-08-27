@@ -208,6 +208,26 @@ export interface DebugLogResponse {
   };
 }
 
+// ---- Per-receiver DSP params (slice-5.2) ------------------------------------
+// Mirrors the backend DSPParams dataclass in apps/server/openwebrx_plus/dsp/types.py.
+// All fields optional — null = "use the mode default" for that field.
+
+export interface DSPParams {
+  low_cut_hz: number | null;
+  high_cut_hz: number | null;
+  agc_enabled: boolean | null;
+  squelch_db: number | null;
+  dc_block_enabled: boolean | null;
+  deemphasis_enabled: boolean | null;
+  manual_gain_db: number | null;
+  // Slice-5.3 — not yet implemented in the chain (accepted but no-op).
+  notch_enabled: boolean | null;
+  notch_freq_hz: number | null;
+  notch_q: number | null;
+  noise_blanker_enabled: boolean | null;
+  noise_blanker_threshold: number | null;
+}
+
 // ---- Client ----------------------------------------------------------------
 
 /** Normalized REST failure — carries the server's detail message when present. */
