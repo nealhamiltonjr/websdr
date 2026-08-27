@@ -159,11 +159,14 @@ export class WaterfallRenderer {
   private cfg: WaterfallRendererConfig;
   private rafId: number | null = null;
   private pendingFrame: FFTFrame | null = null;
-  private resizeObserver: ResizeObserver;
+  private resizeObserver: ResizeObserver | null = null;
   /** Crosshair/tuned-marker overlays (slice-4.6). */
   private overlay!: OverlayRenderer;
   private overlays: VizOverlays = EMPTY_OVERLAYS;
   private axis: FreqAxis | null = null;
+  /** The canvas we render into (HTMLCanvasElement on main thread,
+   *  OffscreenCanvas when running in a worker via slice-11). */
+  private canvasEl: HTMLCanvasElement | OffscreenCanvas;
 
   // GL resources
   private program: WebGLProgram | null = null;
@@ -177,24 +180,35 @@ export class WaterfallRenderer {
   private historyBuffer: Uint8Array;
   private binCount: number = 0;
 
-  constructor(canvas: HTMLCanvasElement, cfg: WaterfallRendererConfig) {
-    const gl = canvas.getContext('webgl2', {
+  /** The backing canvas element (HTMLCanvasElement on main thread,
+   *  OffscreenCanvas when running in a worker via slice-11). */
+  get canvas(): HTMLCanvasElement | OffscreenCanvas {
+    return this.canvasEl;
+  }
+
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, cfg: WaterfallRendererConfig) {
+    const gl = (canvas as HTMLCanvasElement).getContext('webgl2', {
       antialias: false,
       premultipliedAlpha: false,
       preserveDrawingBuffer: false,
-    });
+    }) as WebGL2RenderingContext | null;
     if (!gl) throw new Error('WebGL2 not supported in this browser');
     this.gl = gl;
+    this.canvasEl = canvas;
     this.cfg = cfg;
 
     this.historyBuffer = new Uint8Array(cfg.historyRows * 4); // initial 0×0; resized on first frame
 
     this.initGL();
     this.resize();
-    this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(canvas);
+    // ResizeObserver is only available on the main thread; in a worker
+    // (OffscreenCanvas), the host must post explicit 'resize' messages.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.resize());
+      this.resizeObserver.observe(canvas as HTMLCanvasElement);
+    }
 
-    console.info('[WaterfallRenderer] initialized', { cfg });
+    console.info('[WaterfallRenderer] initialized', { cfg, worker: typeof window === 'undefined' });
   }
 
   /** Current frequency axis (null before the first frame). */
@@ -272,13 +286,19 @@ export class WaterfallRenderer {
   }
 
   resize(): void {
-    const canvas = this.gl.canvas as HTMLCanvasElement;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-    const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+    // The canvas is either an HTMLCanvasElement (main thread) or an
+    // OffscreenCanvas (worker). On main thread we read clientWidth +
+    // devicePixelRatio; in the worker we use the existing width/height
+    // (the host posts explicit resize messages when its OffscreenCanvas
+    // backing needs to change).
+    const dpr = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
+    const clientW = (this.canvasEl as HTMLCanvasElement).clientWidth ?? this.canvasEl.width;
+    const clientH = (this.canvasEl as HTMLCanvasElement).clientHeight ?? this.canvasEl.height;
+    const w = Math.max(1, Math.floor(clientW * dpr));
+    const h = Math.max(1, Math.floor(clientH * dpr));
+    if (this.canvasEl.width !== w || this.canvasEl.height !== h) {
+      this.canvasEl.width = w;
+      this.canvasEl.height = h;
     }
     this.gl.viewport(0, 0, w, h);
   }
@@ -395,7 +415,8 @@ export class WaterfallRenderer {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
-    this.resizeObserver.disconnect();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.overlay.dispose();
     const gl = this.gl;
     if (this.historyTexture) gl.deleteTexture(this.historyTexture);
