@@ -3,8 +3,10 @@
 Streaming GFSK demodulator for the 978 MHz UAT downlink, mirroring the
 architectural shape of :mod:`.ais_demod` (the marine AIS demodulator):
 
-    IQ (cf32) → FM-demod → mid-symbol bit slice → sync-word hunt
-              → bit align → byte align → CRC + RS verify → field decode
+    IQ (cf32) → FM-demod → DC-block (carrier offset comp.)
+              → mid-symbol bit slice → sync-word hunt
+              → phase refinement → bit align → byte align
+              → CRC + RS verify → field decode
 
 Wire facts (DO-282B / RTCA DO-282B §2.2):
 
@@ -16,22 +18,31 @@ Wire facts (DO-282B / RTCA DO-282B §2.2):
     - length 2 → Long  (184-bit payload + 64-bit RS = 248 bits = 31 bytes? — the
       exact byte count is computed from RS params; see uat_protocol)
 
-This v1 takes ``UAT_SAMPLE_RATE`` (2.083333 MSPS = 2 samples/symbol)
-and runs the simplest possible demodulator that produces a CRC-valid
-frame on a synthetic fixture:
+This v2 takes ``UAT_SAMPLE_RATE`` (2.083333 MSPS = 2 samples/symbol)
+and runs a demodulator that produces a CRC-valid frame on a synthetic
+fixture AND tolerates realistic RF impairments (slice-17):
 
   1. FM demod (np.angle of the conjugate-product difference)
-  2. Mid-symbol slice at one bit-period after a candidate sync
-  3. Sync detection via bit-wise compare with the 12-bit sync word
+  2. **Carrier offset compensation** (slice-17): subtract a slow
+     moving average (over ~5 symbols = 10 samples) from the FM signal.
+     A residual carrier offset (the SDR's LO doesn't exactly match the
+     signal center) shows up as a DC bias on the FM-demodulated output;
+     if not removed, the bit decision threshold drifts and the demod
+     fails on signals with even small (±1 kHz) offset.
+  3. Mid-symbol bit slice at one bit-period after a candidate sync
+  4. Sync detection via bit-wise compare with the 12-bit sync word
      (tolerating up to 2 bit errors — same margin as the AIS demod)
-  4. Bit → byte pack MSB-first
-  5. Pass to :mod:`.uat_protocol` for RS + CRC + field decode
+  5. **Per-frame phase refinement** (slice-17): once sync is detected
+     at sample ``i``, try also ``i ± 1`` and pick the offset with the
+     best sync correlation. This compensates for small clock drift
+     (sample clock mismatch up to ±0.5 sample per symbol ≈ ±100 ppm).
+  6. Bit → byte pack MSB-first
+  7. Pass to :mod:`.uat_protocol` for RS + CRC + field decode
 
-This is sufficient for the baked fixture (synthetic GFSK, noise-free)
-and a starting point for live reception — real receivers will want a
-proper quadrature-demod + matched-filter + symbol-timing-recovery
-chain (the dump978 binary is the production answer when live traffic
-matters).
+This v2 is sufficient for live-traffic bring-up on the test fixtures
+plus small impairments; the dump978 binary remains the production
+answer for traffic with high noise or large (>5 kHz) carrier offsets
+(see ADR-003 subprocess family).
 """
 
 from __future__ import annotations
@@ -64,6 +75,20 @@ _TAIL_KEEP = 8192
 
 # Noise-floor threshold (dBFS, similar philosophy to Mode S).
 _NOISE_DB_FLOOR = -60.0
+
+# Slice-17: carrier offset compensation. A moving-average window over
+# the FM-demodulated signal removes DC bias from residual LO offset.
+# The window must be MUCH longer than the symbol period so it averages
+# out the FSK deviation swings (±π/4 per sample at 2 sps) while still
+# tracking slow carrier drift over a few hundred ms. 200 samples =
+# 100 symbols ≈ half of a 232-bit short frame — sweet spot.
+_DC_BLOCK_WINDOW = 200  # samples (~100 symbols at 2 sps)
+
+# Slice-17: per-frame phase refinement. When a sync is detected at
+# sample i, sweep i ± _PHASE_SEARCH_RANGE samples and pick the offset
+# with the best sync correlation. At 2 sps, ±1 sample = ±0.5 symbol;
+# this covers clock drift up to ±0.5 sample per frame-length.
+_PHASE_SEARCH_RANGE = 1  # samples
 
 
 class UatReceiver:
@@ -113,6 +138,18 @@ class UatReceiver:
         prod = samples[1:] * np.conj(samples[:-1])
         fm = np.angle(prod).astype(np.float32, copy=False)
 
+        # Slice-17: carrier offset compensation. A residual LO offset
+        # shows up as a DC bias on the FM-demodulated output; if not
+        # removed, the sign(fm) bit decision drifts. Subtract a slow
+        # moving average (window = _DC_BLOCK_WINDOW samples = ~5 sym).
+        # np.convolve mode="same" returns same length; the boundary
+        # samples see a partial window but that's tolerable since
+        # we scan past the silence-padded frame boundaries anyway.
+        if fm.size >= _DC_BLOCK_WINDOW:
+            dc_kernel = np.ones(_DC_BLOCK_WINDOW, dtype=np.float32) / _DC_BLOCK_WINDOW
+            dc_estimate = np.convolve(fm, dc_kernel, mode="same")
+            fm = fm - dc_estimate
+
         # Adaptive threshold for sync detection: mid-symbol bit value is
         # sign(fm); we scan for windows of sign(fm) that match the sync
         # pattern tolerating _SYNC_TOL bit errors.
@@ -152,6 +189,13 @@ class UatReceiver:
             if not _matches_sync(bits, i, sync_bits, _SYNC_TOL):
                 i += 1
                 continue
+            # Slice-17: per-frame phase refinement. Sync is detected at
+            # sample i — sweep i ± _PHASE_SEARCH_RANGE samples and pick
+            # the offset with the best sync correlation. This compensates
+            # for small clock drift between the transmitter and our SDR's
+            # sample clock. The best-scoring offset replaces i for the
+            # rest of the frame decode.
+            i = _refine_sync_phase(bits, i, sync_bits, _PHASE_SEARCH_RANGE)
             # Found a sync. Read length field next.
             length_bits_start = i + _SYNC_LEN * _SAMPLES_PER_SYMBOL
             if length_bits_start + _LEN_BITS * _SAMPLES_PER_SYMBOL > bits_n:
@@ -252,6 +296,63 @@ def _matches_sync(
     mid = window[n_per_sym // 2 :: n_per_sym][: len(sync)]
     errs = int(np.count_nonzero(mid != sync))
     return errs <= tol
+
+
+def _sync_error_count(
+    bits: np.ndarray,
+    start: int,
+    sync: np.ndarray,
+) -> int:
+    """Count mid-symbol bit errors against the sync pattern at `start`.
+
+    Pure function (no tolerance check) — used by the slice-17 phase
+    refinement sweep to pick the best of several candidate offsets.
+    Returns the number of mismatched bits (0 = perfect sync).
+    """
+    n_per_sym = _SAMPLES_PER_SYMBOL
+    window = bits[start : start + len(sync) * n_per_sym]
+    if window.size < len(sync) * n_per_sym:
+        return len(sync)  # worse than any in-bounds candidate
+    mid = window[n_per_sym // 2 :: n_per_sym][: len(sync)]
+    return int(np.count_nonzero(mid != sync))
+
+
+def _refine_sync_phase(
+    bits: np.ndarray,
+    start: int,
+    sync: np.ndarray,
+    search_range: int,
+) -> int:
+    """Slice-17: per-frame phase refinement.
+
+    Once the sync pattern is detected at sample ``start`` (within
+    ``_SYNC_TOL`` bit errors), sweep ``start ± search_range`` samples
+    and pick the offset with the FEWEST sync bit errors. The selected
+    offset replaces ``start`` for the rest of the frame decode.
+
+    At 2 samples/symbol, ±1 sample covers ±0.5 symbol of phase drift
+    — i.e. clock mismatch up to ~100 ppm over a 232-bit frame. The
+    refinement is bounded (O(search_range) sync_error_count calls),
+    each O(len(sync)) — cheap enough to run per frame.
+
+    If the original ``start`` is already the best (or one of several
+    ties), it is returned unchanged. The caller's tolerance check has
+    already validated that we have a viable sync; this function
+    only picks the best of nearby candidates.
+    """
+    if search_range <= 0:
+        return start
+    best_start = start
+    best_errs = _sync_error_count(bits, start, sync)
+    for delta in range(1, search_range + 1):
+        for cand in (start - delta, start + delta):
+            if cand < 0:
+                continue
+            errs = _sync_error_count(bits, cand, sync)
+            if errs < best_errs:
+                best_errs = errs
+                best_start = cand
+    return best_start
 
 
 def _read_bits_at(

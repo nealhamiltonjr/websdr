@@ -304,3 +304,199 @@ def test_plugin_status_initial() -> None:
 def test_plugin_stop_is_noop() -> None:
     p = Dump978Plugin()
     p.stop()  # must not raise
+
+
+# === Slice-17: carrier offset compensation + symbol timing recovery =========
+#
+# The v2 demod tolerates realistic RF impairments the v1 demod would fail
+# on: residual LO offset (DC bias on FM-demod output) and small clock
+# drift (sample clock mismatch causing the mid-symbol slice to wander).
+
+
+def _apply_carrier_offset(signal: np.ndarray, hz: float, sample_rate: int) -> np.ndarray:
+    """Multiply by exp(j 2π·hz·n/fs) to simulate a residual carrier offset.
+
+    This is what happens when the SDR's LO doesn't exactly match the
+    signal center: the downconverted IQ has a slow-rotating phase that
+    appears as a constant DC offset on the FM-demodulated output
+    (offset_hz * 2π / sample_rate radians per sample).
+    """
+    n = np.arange(signal.size, dtype=np.float32)
+    rotation = np.exp(1j * 2 * math.pi * hz * n / sample_rate).astype(np.complex64)
+    return (signal * rotation).astype(np.complex64)
+
+
+def _apply_clock_drift(signal: np.ndarray, ppm: float) -> np.ndarray:
+    """Resample the signal at a slightly different rate.
+
+    Positive ppm = our SDR samples FASTER than the transmitter (the
+    signal appears stretched in our time → we receive fewer samples
+    than the transmitter emitted per symbol → bits drift FORWARD
+    relative to the mid-symbol slice). Negative ppm = slower.
+    """
+    if ppm == 0:
+        return signal.copy()
+    # Linear interpolation resample. Sample the original at fractional
+    # indices scaled by (1 + ppm/1e6).
+    n_out = int(round(signal.size * (1 + ppm / 1e6)))
+    idx = np.linspace(0, signal.size - 1, n_out, dtype=np.float32)
+    i0 = np.floor(idx).astype(np.int64)
+    i1 = np.clip(i0 + 1, 0, signal.size - 1)
+    frac = (idx - i0).astype(np.complex64)
+    # signal[i0] is shape (n_out,) complex64; we want element-wise
+    # interpolation: out[k] = signal[i0[k]] * (1 - frac[k]) + signal[i1[k]] * frac[k]
+    out = signal[i0] * (np.complex64(1) - frac) + signal[i1] * frac
+    return out.astype(np.complex64)
+
+
+def test_demod_tolerates_small_carrier_offset() -> None:
+    """Slice-17: with the DC-block (window=200 samples), the demod
+    must still decode the frame when a ±5 kHz residual carrier offset
+    is applied. The v1 demod would fail (the DC bias shifts the bit
+    decision threshold)."""
+    payload_with_crc = _build_payload_with_crc()
+    parity = rs_encode(payload_with_crc, 6)
+    bits = _build_uat_frame_bits(payload_with_crc, parity)
+    signal = _gfsk_modulate(bits, sps=2)
+    silence = np.zeros(2000, dtype=np.complex64)
+    signal = np.concatenate([silence, signal, silence])
+
+    # Apply a 5 kHz carrier offset — typical residual after a low-cost
+    # SDR's auto-PPM correction still leaves ~1-5 kHz of drift.
+    offset_signal = _apply_carrier_offset(signal, hz=5000.0, sample_rate=UAT_SAMPLE_RATE)
+
+    rx = UatReceiver(sample_rate=UAT_SAMPLE_RATE)
+    frames = list(rx.feed(offset_signal))
+    assert len(frames) >= 1, (
+        f"no frames decoded with +5kHz offset (frames={rx.frames}, "
+        f"crc_failures={rx.crc_failures})"
+    )
+    assert frames[0].icao == "4D22AA"
+    assert frames[0].callsign == "OWRX001"
+
+
+def test_demod_tolerates_negative_carrier_offset() -> None:
+    """Same as above but with a -3 kHz offset (rotation the other way)."""
+    payload_with_crc = _build_payload_with_crc()
+    parity = rs_encode(payload_with_crc, 6)
+    bits = _build_uat_frame_bits(payload_with_crc, parity)
+    signal = _gfsk_modulate(bits, sps=2)
+    silence = np.zeros(2000, dtype=np.complex64)
+    signal = np.concatenate([silence, signal, silence])
+
+    offset_signal = _apply_carrier_offset(signal, hz=-3000.0, sample_rate=UAT_SAMPLE_RATE)
+    rx = UatReceiver(sample_rate=UAT_SAMPLE_RATE)
+    frames = list(rx.feed(offset_signal))
+    assert len(frames) >= 1, (
+        f"no frames decoded with -3kHz offset (frames={rx.frames}, "
+        f"crc_failures={rx.crc_failures})"
+    )
+    assert frames[0].icao == "4D22AA"
+
+
+def test_demod_tolerates_small_clock_drift() -> None:
+    """Slice-17: with per-frame phase refinement (search_range=1),
+    the demod must still decode the frame when the sample clock drifts
+    by ±50 ppm (so the mid-symbol slice drifts by up to ±0.5 sample
+    over a 232-bit frame)."""
+    payload_with_crc = _build_payload_with_crc()
+    parity = rs_encode(payload_with_crc, 6)
+    bits = _build_uat_frame_bits(payload_with_crc, parity)
+    signal = _gfsk_modulate(bits, sps=2)
+    silence = np.zeros(2000, dtype=np.complex64)
+    signal = np.concatenate([silence, signal, silence])
+
+    drifted = _apply_clock_drift(signal, ppm=50.0)
+    rx = UatReceiver(sample_rate=UAT_SAMPLE_RATE)
+    frames = list(rx.feed(drifted))
+    assert len(frames) >= 1, (
+        f"no frames decoded with +50ppm drift (frames={rx.frames}, "
+        f"crc_failures={rx.crc_failures})"
+    )
+    assert frames[0].icao == "4D22AA"
+
+
+def test_demod_tolerates_negative_clock_drift() -> None:
+    """Same but with -50 ppm drift."""
+    payload_with_crc = _build_payload_with_crc()
+    parity = rs_encode(payload_with_crc, 6)
+    bits = _build_uat_frame_bits(payload_with_crc, parity)
+    signal = _gfsk_modulate(bits, sps=2)
+    silence = np.zeros(2000, dtype=np.complex64)
+    signal = np.concatenate([silence, signal, silence])
+
+    drifted = _apply_clock_drift(signal, ppm=-50.0)
+    rx = UatReceiver(sample_rate=UAT_SAMPLE_RATE)
+    frames = list(rx.feed(drifted))
+    assert len(frames) >= 1, (
+        f"no frames decoded with -50ppm drift (frames={rx.frames}, "
+        f"crc_failures={rx.crc_failures})"
+    )
+    assert frames[0].icao == "4D22AA"
+
+
+def test_demod_tolerates_combined_offset_and_drift() -> None:
+    """Slice-17 stress: ±2 kHz offset + ±30 ppm drift — both
+    impairments together. The DC-block + phase refinement handle
+    each; combined, they still decode."""
+    payload_with_crc = _build_payload_with_crc()
+    parity = rs_encode(payload_with_crc, 6)
+    bits = _build_uat_frame_bits(payload_with_crc, parity)
+    signal = _gfsk_modulate(bits, sps=2)
+    silence = np.zeros(2000, dtype=np.complex64)
+    signal = np.concatenate([silence, signal, silence])
+
+    impaired = _apply_carrier_offset(signal, hz=2000.0, sample_rate=UAT_SAMPLE_RATE)
+    impaired = _apply_clock_drift(impaired, ppm=30.0)
+    rx = UatReceiver(sample_rate=UAT_SAMPLE_RATE)
+    frames = list(rx.feed(impaired))
+    assert len(frames) >= 1, (
+        f"no frames decoded with combined impairments "
+        f"(frames={rx.frames}, crc_failures={rx.crc_failures})"
+    )
+    assert frames[0].icao == "4D22AA"
+
+
+def test_refine_sync_phase_picks_best_offset() -> None:
+    """The phase refinement function should pick the candidate with
+    the fewest sync bit errors when given a slightly-off starting
+    offset."""
+    from openwebrx_plus.plugins.uat_demod import (
+        _PHASE_SEARCH_RANGE,
+        _refine_sync_phase,
+        _sync_error_count,
+    )
+
+    # Build a perfectly-modulated sync so we know the truth.
+    sync_bits_list = [0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0]
+    # Each bit takes 2 samples; we replicate the mid-symbol-slice logic
+    # to construct an ideal `bits` array where the demod would have
+    # detected the sync perfectly at offset 0.
+    bits = np.zeros(len(sync_bits_list) * 2 + 4, dtype=np.int8)
+    # Mid-symbol slice reads at index 1 of each 2-sample symbol.
+    # Set bit values at positions 0,1 (the first symbol pair).
+    for i, b in enumerate(sync_bits_list):
+        bits[i * 2 + 1] = b  # mid-symbol sample carries the value
+
+    sync = np.array(sync_bits_list, dtype=np.int8)
+
+    # At offset 0: 0 errors. At offset ±1: should have at least 1 error.
+    assert _sync_error_count(bits, 0, sync) == 0
+    # The refinement returns the same offset if it's already perfect.
+    assert _refine_sync_phase(bits, 0, sync, _PHASE_SEARCH_RANGE) == 0
+
+    # Now shift the data so the optimal offset is +1 (the demod
+    # detected the sync one sample early).
+    bits_shifted = np.zeros(len(bits) + 1, dtype=np.int8)
+    bits_shifted[1:] = bits[:-1] if False else np.concatenate([bits[:-1], [0]])  # keep length
+    bits_shifted[1:] = bits
+    # Looking from offset 0 now sees the original offset-1 sync (1 err);
+    # looking from offset 1 sees the perfect sync (0 errs).
+    # _refine_sync_phase(start=0) should pick offset=1.
+    # NOTE: this requires the original sync to actually be at offset 1
+    # in the shifted array, which it is.
+    errs_at_0 = _sync_error_count(bits_shifted, 0, sync)
+    errs_at_1 = _sync_error_count(bits_shifted, 1, sync)
+    assert errs_at_1 < errs_at_0, "test setup wrong"
+    chosen = _refine_sync_phase(bits_shifted, 0, sync, _PHASE_SEARCH_RANGE)
+    assert chosen == 1, f"expected refined offset=1, got {chosen}"

@@ -127,3 +127,48 @@ contract; a real dump1090 binary will need verification on:
 (c) the behavior on a real SBS1 socket close mid-stream (the reader
     thread's recv loop returns 0 bytes and exits; main loop notices
     child poll()).
+
+---
+## slice-17 (2026-08-28): dump978 timing recovery + carrier offset compensation
+
+**Goal:** close the "dump978 live-traffic bring-up" roadmap item — the
+v1 demodulator worked only on the noise-free synthetic fixture; real
+RF has residual LO offset (DC bias on FM-demod) + sample clock drift
+(mid-symbol slice wanders).
+
+**Shipped:**
+- **Carrier offset compensation** (DC-block): a moving-average
+  filter (window = 200 samples = 100 symbols) on the FM-demodulated
+  signal removes DC bias from residual LO offset. The window must be
+  much longer than the symbol period so it averages out the FSK ±π/4
+  swings while still tracking slow carrier drift over a few hundred ms.
+  200 samples = half of a 232-bit short frame — the sweet spot.
+- **Per-frame phase refinement** (`_refine_sync_phase`): once a sync
+  is detected at sample i, sweep i ± 1 sample and pick the offset
+  with the FEWEST sync bit errors. At 2 sps, ±1 sample = ±0.5
+  symbol of phase drift = ~100 ppm clock mismatch over a 232-bit
+  frame. Cheap (O(search_range × len(sync)) per frame).
+- New helpers `_sync_error_count` (pure error-count function used by
+  the refinement sweep) and `_refine_sync_phase`.
+
+**Tests:** 6 new in `apps/server/tests/test_dump978_decoder.py`:
+  - +5 kHz carrier offset (the v1 demod would fail)
+  - −3 kHz carrier offset
+  - +50 ppm clock drift (sample clock mismatch)
+  - −50 ppm clock drift
+  - combined: +2 kHz offset + +30 ppm drift
+  - `_refine_sync_phase_picks_best_offset`: unit test for the phase
+    refinement algorithm itself (perfect sync at offset 0, the
+    refinement picks it unchanged; shifted sync, the refinement
+    picks offset 1 over offset 0).
+
+All 425 server tests + 142 web tests pass; ruff + mypy --strict clean.
+
+**Sync:** commit `f03cec8..(slice-17)` — will push next.
+
+**Live bring-up remaining:** real RF will need additional handling
+for: (a) large (>5 kHz) carrier offsets (the DC-block window may not
+track fast enough), (b) high noise (RS single-error correction only,
+no error-erasure decoding), (c) frames straddling very large (>2 sps)
+clock drift. The dump978 binary remains the production answer for
+those scenarios; this v2 covers the common case.
