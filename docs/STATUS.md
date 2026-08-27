@@ -1,6 +1,6 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-27, after slice-5.2 (DSP fine-grained controls)
+**Updated:** 2026-08-27, after slice-5.3 (IQ-to-audio ADR + full-app E2E smoke test)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
 **Companion:** `ADR/` for decision records; `docs/slice-01-plan.md` for the original slice plan (kept for history).
 
@@ -14,16 +14,16 @@ The platform is a working, hardware-free, end-to-end SDR receiver: 11 source bac
 
 | Gate | Result |
 |---|---|
-| Server tests (`scripts/run-server-tests.sh`) | **297/297 pass**, 84% coverage, ~70 s |
+| Server tests (`scripts/run-server-tests.sh`) | **298/298 pass**, 84% coverage, ~71 s |
 | `mypy --strict` (43 files) | **clean** |
 | `ruff check` | **clean** |
 | Web `vitest` | **95/95 pass** (8 files) |
 | Web `tsc --noEmit` | **clean** |
 | `vite build` | clean (this session) |
 
-- Codebase size: **~16.8 k lines** Python (server + tests, 24 test files) · **~9.4 k lines** TS/TSX (web).
+- Codebase size: **~17.5 k lines** Python (server + tests, 25 test files) · **~9.4 k lines** TS/TSX (web).
 - Registered sources: **11** (`rtl_sdr`, `rtl_tcp`, `airspy`, `sdrplay`, `soapy`, `kiwi`, `spyserver`, `openwebrx_remote`, `vfo`, `file`, `simulated`). Decoder plugins: **2** (`adsb` in-process, `dump1090` subprocess) — both feed the same aircraft-table viz.
-- ADRs accepted: **6** (001 workspace, 002 DSP+AI cascade, 003 decoders, 004 pycsdr/sources, 005 VFO, 006 federation).
+- ADRs accepted: **7** (001 workspace, 002 DSP+AI cascade, 003 decoders, 004 pycsdr/sources, 005 VFO, 006 federation, 007 IQ-to-audio enhancement rejection).
 - In-app panels (slice-5.1): **Settings** (display/audio/DSP/sources/decoders/debug sections, persisted to TOML) + **Debugger** (live log ring buffer + error capture + filters + export + auto-refresh).
 - DSP controls (slice-5.2): per-receiver **DSPControls** drawer with bandpass width / AGC / squelch / DC block / de-emphasis / manual gain (wired to pycsdr blocks); notch filter + noise blanker accepted but stubbed (slice-5.3 will implement them via custom Python or upstream pycsdr contribution).
 
@@ -95,6 +95,7 @@ openwebrx-plus/
 | 5.0 | Foundation: AGENTS.md (AI operating instructions), LICENSE stub (AGPL-3.0 placeholder pointing at canonical source), sync-up cadence doc (`SYNC-UP.md`), portable `scripts/run-server-tests.sh`, fix to `.github/workflows/ci.yml` pnpm cache-dependency-path (was wrong, breaking CI caching) |
 | 5.1 | Settings & Debugger infrastructure (backend + frontend): `observability/debug_log.py` ring buffer (`DebugLogRingBuffer`, `LogEntry`, structlog capture processor, asyncio loop + threading excepthook capture); `config/user_settings.py` TOML-persisted runtime-mutable user preferences (`DisplaySettings`, `AudioSettings`, `DSPSettings`, `SourcesSettings`, `DecoderSettings`, `DebugSettings`); `api/settings_debug.py` REST endpoints (`GET/PUT/POST /api/settings`, `GET /api/debug/{logs,errors,stats,export}`, `POST /api/debug/clear`); frontend `SettingsPanel.tsx` (six-section modal with optimistic updates + debounced PUT) + `DebugPanel.tsx` (logs/errors views + filters + pagination + auto-refresh + NDJSON export); wired into main route header (gear + bug buttons); E2E tests boot real uvicorn + httpx to validate full HTTP/middleware stack |
 | 5.2 | DSP fine-grained controls (the "pull out the weak signal" core thesis): `dsp/types.py:DSPParams` flat dataclass with 12 fields (manual bandpass cuts / AGC / squelch / DC block / de-emphasis / manual gain / notch / noise blanker — last two accepted but no-op until slice-5.3); `AudioChain` extended to accept `dsp_params` and conditionally wire `Agc`/`Squelch`/`Gain`/`NfmDeemphasis`/manual bandpass reconfiguration; `ReceiverSession.set_dsp_params(patch)` async method merges patches and rebuilds the chain under the chain lock; `WS setDSPParams` command handler with `DSPParams.from_dict()` (unknown fields ignored for forward compat); metadata pump echoes `dspParams` so the frontend stays in sync; frontend `DSPControls.tsx` right-side drawer panel with bandpass width sliders, AGC toggle, manual makeup gain (with on/off + dB slider), squelch (with on/off + dBFS threshold slider), DC block + de-emphasis toggles with "indeterminate" state for mode defaults, notch + noise blanker with "experimental" badges; wired into main route header (🌡 DSP button); 18 new unit tests (DSPParams round-trip + merge + WS handler + AudioChain construction with each optional block) |
+| 5.3 | IQ-to-audio honest evaluation + full-app E2E smoke test: `ADR/007-iq-to-audio-enhancement.md` documents the rejection of a parallel "audio enhancement pipeline" — the ADR-002 AI cascade (DeepFilterNet → RNNoise WASM → Demucs/Open-Unmix) is the architecturally-correct post-DSP enhancement layer; building a parallel pipeline now would duplicate work already planned and violate ADR-004's scipy-offline-only rule; notch + NB fields stay accepted-but-no-op until upstream pycsdr contribution (Option D); new `tests/test_full_app_e2e.py` boots a real uvicorn server + httpx client and hits every public REST endpoint (health / version / sources / hardware / fixtures / decoders / receivers / spawn+teardown / settings GET+PUT+reset / debug logs+stats+clear+export) — the "simulate usage of the entire app" test the user asked for |
 
 ## What works end-to-end today
 
