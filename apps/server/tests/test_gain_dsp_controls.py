@@ -16,7 +16,8 @@ Covers:
     command bytes) incl. latest-wins queue semantics
   - End-to-end WS: setGain/setDSPMode control frames → metadata echo with
     gain/dspMode/gainRange/supportsAgc → REST /api/receivers reflection,
-    plus error frames for out-of-range gain and unavailable AI modes
+    plus error frames for out-of-range gain and unknown DSP modes (slice-10
+    made ai/cascade LIVE so they're now accepted, not rejected)
 """
 
 from __future__ import annotations
@@ -443,7 +444,8 @@ class TestWsGainDspEndToEnd:
                     assert err["command"] == "setGain"
                     assert "outside the file range" in err["message"]
 
-                    # AI mode → honest rejection.
+                    # AI mode → accepted (slice-10 flipped the gate).
+                    # The metadata echo must reflect the new mode.
                     ws.send_text(
                         json.dumps(
                             {
@@ -454,19 +456,19 @@ class TestWsGainDspEndToEnd:
                             }
                         )
                     )
-                    err = _recv_json(ws, lambda p: p.get("type") == "error")
-                    assert err["command"] == "setDSPMode"
-                    assert "DeepFilterNet" in err["message"]
+                    meta = _recv_json(ws, lambda p: p.get("type") == "metadata")
+                    assert meta["dspMode"] == "ai"
 
                 # REST reflects the same control state (checked before the
-                # teardown delete).
+                # teardown delete). The session ended on 'ai' mode; the REST
+                # echo of dsp_mode reflects the last accepted value.
                 listed = client.get("/api/receivers").json()
                 match = next(
                     (r for r in listed if r["receiver_id"] == "rx-gain-e2e"), None
                 )
                 assert match is not None, listed
                 assert match["gain"] == 6.0
-                assert match["dsp_mode"] == "raw"
+                assert match["dsp_mode"] == "ai"
             finally:
                 # Destroy while the portal loop is still alive so the
                 # session stops cleanly (no frozen tasks).

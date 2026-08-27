@@ -61,6 +61,31 @@ jobs:
       # pattern in scripts/README-dsp-bootstrap.md (with the user-prefix
       # replaced by the system prefix /usr/local so no env vars are needed).
       - name: Build + install libcsdr to /usr/local
+        # Slice-12: cache the built libcsdr artifacts keyed on the csdr git
+        # HEAD sha. A `git clone --depth 1` of an unchanged ref returns the
+        # same SHA every time, so the cache key is stable across runs that
+        # happen between pushes to the upstream csdr repo (~60-90 s saved
+        # per backend CI run when the cache is warm).
+        env:
+          CSDR_CACHE_KEY: libcsdr-${{ runner.os }}-2026-08-28
+        run: |
+          set -euo pipefail
+          # Determine the upstream csdr HEAD so the cache key reflects the
+          # exact source we'd build.
+          CSDR_SHA=$(git ls-remote https://github.com/jketterl/csdr.git HEAD | awk '{print $1}')
+          echo "CSDR_SHA=$CSDR_SHA" >> "$GITHUB_ENV"
+          echo "CSDR_CACHE_KEY=libcsdr-${{ runner.os }}-$CSDR_SHA" >> "$GITHUB_ENV"
+      - name: Cache libcsdr artifacts
+        id: csdr-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/libcsdr.so*
+            /usr/local/lib/libcsdr.a
+            /usr/local/include/csdr/
+          key: ${{ env.CSDR_CACHE_KEY }}
+      - name: Build libcsdr (cache miss only)
+        if: steps.csdr-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -86,6 +111,14 @@ jobs:
           # include path. pycsdr's setup.py will look for csdr/module.hpp.
           test -f /usr/local/include/csdr/module.hpp || \
             { echo "libcsdr headers not installed"; exit 1; }
+      - name: Restore libcsdr from cache (cache hit only)
+        if: steps.csdr-cache.outputs.cache-hit == 'true'
+        run: |
+          # The cache restores artifacts directly to /usr/local; ldconfig
+          # to pick up the .so symlinks.
+          sudo ldconfig
+          test -f /usr/local/include/csdr/module.hpp || \
+            { echo "libcsdr cache restore incomplete"; exit 1; }
       - run: uv sync --frozen
       # The *.cf32 IQ fixtures are gitignored (they are large binary
       # blobs regenerable from scripts/generate_iq_fixtures.py with a

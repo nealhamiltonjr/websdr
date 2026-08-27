@@ -1,4 +1,4 @@
-// OpenWebRX+ Web — flat ESLint config (slice-5.4 CI repair).
+// OpenWebRX+ Web — flat ESLint config (slice-5.4 CI repair; slice-12 unified).
 //
 // Background: ESLint 9.0+ requires a flat config file
 // (eslint.config.{js,mjs,cjs}) and no longer reads .eslintrc.* files.
@@ -6,20 +6,23 @@
 // immediately with "ESLint couldn't find an eslint.config.(js|mjs|cjs)
 // file." — which broke every CI run for the Frontend job.
 //
-// This is intentionally minimal: TypeScript parser + a small rule set
-// that lets the existing code pass (prettier already enforces style,
-// tsc already catches type errors, so eslint's job here is to catch
-// the rare runtime-impacting issues TS doesn't). Add stricter rules
-// in slice-5.5+ once the codebase has been re-lint-cleaned.
+// Slice-12: migrated from the legacy
+// @typescript-eslint/eslint-plugin + @typescript-eslint/parser pair
+// to the modern unified `typescript-eslint` package (smaller install,
+// simpler flat config — one import instead of two).
+//
+// This is intentionally minimal: a small rule set that lets the
+// existing code pass (prettier already enforces style, tsc already
+// catches type errors, so eslint's job here is to catch the rare
+// runtime-impacting issues TS doesn't).
 //
 // References:
 //   https://eslint.org/docs/latest/use/configure/configuration-files
 //   https://typescript-eslint.io/getting-started
 
-import tsParser from '@typescript-eslint/parser';
-import tsPlugin from '@typescript-eslint/eslint-plugin';
+import tseslint from 'typescript-eslint';
 
-export default [
+export default tseslint.config(
   // Global ignores — generated/build artifacts.
   {
     ignores: [
@@ -31,27 +34,15 @@ export default [
     ],
   },
 
-  // TS/TSX files — use the TS parser + a minimal subset of @typescript-eslint
-  // recommended rules. We turn off rules that conflict with prettier (style)
-  // or that tsc already catches (no-unused-vars, no-undef, etc.).
+  // TS/TSX files — use the TS parser + the recommended preset.
+  // We turn off rules that conflict with prettier (style) or that tsc
+  // already catches (no-unused-vars, no-undef, etc.).
+  ...tseslint.configs.recommended,
+
+  // Override rules that conflict with prettier or that tsc covers.
   {
     files: ['**/*.{ts,tsx}'],
-    languageOptions: {
-      parser: tsParser,
-      parserOptions: {
-        ecmaVersion: 'latest',
-        sourceType: 'module',
-        ecmaFeatures: { jsx: true },
-      },
-    },
-    plugins: {
-      '@typescript-eslint': tsPlugin,
-    },
     rules: {
-      // Use the @typescript-eslint recommended preset as a base.
-      ...tsPlugin.configs.recommended.rules,
-
-      // Override rules that conflict with prettier or that tsc covers.
       '@typescript-eslint/no-unused-vars': [
         'warn',
         {
@@ -87,4 +78,4 @@ export default [
       '@typescript-eslint/no-empty-function': 'off',
     },
   },
-];
+);
