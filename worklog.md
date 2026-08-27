@@ -237,3 +237,60 @@ once that lands: `self.df_state.process_frame(samples, &self.model)`.
 The spectral-subtraction algorithm is the v1 production impl; it's
 real (not a stub) and produces visibly lower noise on synthetic
 signals (mirrors the numpy AIDenoiser's behavior).
+
+---
+## slice-19 (2026-08-28): RNNoise WASM client-side (AI cascade Stage 2b)
+
+**Goal:** close the "RNNoise WASM client-side (AI cascade Stage 2b)"
+roadmap item. The slice-10 in-process AIDenoiser is Stage 2a
+(server-side, pure numpy); Stage 2b is client-side, in the browser,
+for low-latency denoising without round-tripping through the server.
+
+**Shipped:**
+- New TypeScript loader module at
+  `apps/web/src/lib/denoise/RNNoiseLoader.ts`:
+  - `loadRNNoiseModule()` — async probe + dynamic import. Fetches
+    `/pkg/rnnoise_wasm.js` (HEAD), and if 200, dynamically imports
+    it. Returns the WASM module or null (cached).
+  - `createDenoiser(sampleRate)` — wraps the WASM module's `Denoiser`
+    class in a `RNNoiseDenoiser` interface (frameSize, processFrame,
+    reset, dispose). Idempotent dispose, wrong-frame-size passthrough,
+    best-effort error recovery.
+  - `isRNNoiseAvailable()`, `isRNNoiseLoadAttempted()`,
+    `resetRNNoiseCache()` — observability + test helpers.
+  - Constants: `RNNOISE_FRAME_SIZE = 480` (matches DeepFilterNet /
+    RNNoise canonical frame), `RNNOISE_SAMPLE_RATE = 48000` (the rate
+    the RNN was trained on).
+- 8 new tests in `apps/web/src/lib/denoise/RNNoiseLoader.test.ts`:
+  - public API surface exposed (loadRNNoiseModule, createDenoiser,
+    isRNNoiseAvailable, isRNNoiseLoadAttempted, resetRNNoiseCache,
+    RNNOISE_FRAME_SIZE, RNNOISE_SAMPLE_RATE)
+  - reports "not attempted" before any load call
+  - returns null when WASM package is not deployed (the not-built
+    path — the test env has no emcc; operators build separately)
+  - caches the not-deployed result (no repeat probing)
+  - createDenoiser returns null when no module is loaded
+  - resetRNNoiseCache clears the cache (allows re-probing)
+  - constants match the RNNoise canonical defaults
+  - stub behavior: createDenoiser returns null at any sample rate
+- Updated `packages/rnnoise-wasm/README.md` with the operator build
+  recipe (emcc install → wasm-pack build → copy pkg/ to web/public),
+  the wire format the loader expects, and the rationale for not
+  shipping the binary (repo bloat, license attribution, CI runtime).
+
+**Pattern**: mirrors slice-18's Rust-backed AIDenoiser — opt-in
+native acceleration with a graceful fallback. The AudioPlayer stays
+the default; operators who want client-side denoise build and deploy
+the WASM, and the loader picks it up automatically.
+
+All 430 server tests + 150 web tests pass; ruff + mypy --strict +
+tsc + eslint clean.
+
+**Sync:** commit `cc76fa2..(slice-19)` — will push next.
+
+**Future work remaining:** wire the loaded `RNNoiseDenoiser` into
+the AudioPlayer. The current AudioPlayer uses scheduled
+`AudioBufferSourceNode`s for low-overhead playback; swapping to an
+`AudioWorkletProcessor` that runs RNNoise frame-by-frame is the
+next slice. The slice-19 loader is the integration plumbing; the
+AudioWorklet swap is the actual audio-path change.
