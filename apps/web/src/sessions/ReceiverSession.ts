@@ -68,6 +68,20 @@ export class ReceiverSession {
   private metadata: ReceiverMetadata | null = null;
   private audioNode: AudioNode | null = null;
   private cursor: CursorState | null = null;
+  /**
+   * Optional forward sink for cross-window cursor broadcast (slice-6.3).
+   *
+   * When `setCursor` is called from a local viz (mouse over a canvas in
+   * THIS page), the session both emits on `cursorStream` (local) AND calls
+   * this sink so the SharedWorker can fan the cursor out to every other
+   * page subscribed to this receiver (popouts, etc.). Set by the route
+   * that owns the SharedWorker port (main.tsx / popout.tsx).
+   *
+   * `ingestRemoteCursor` (called when the worker hands us a cursor that
+   * originated in ANOTHER page) updates the local state + emits on
+   * `cursorStream` but does NOT re-forward (otherwise we'd echo forever).
+   */
+  private cursorForward: ((hz: number | null, sourceVizId: string) => void) | null = null;
 
   constructor(id: string) {
     this.id = id;
@@ -94,10 +108,32 @@ export class ReceiverSession {
     this.decoderStream.emit(envelope);
   }
 
+  /** Wire a forward sink for cross-window cursor broadcast (slice-6.3).
+   *  Set by the route that owns the SharedWorker port. Pass null to detach. */
+  setCursorForward(fn: ((hz: number | null, sourceVizId: string) => void) | null): void {
+    this.cursorForward = fn;
+  }
+
   /** Publish the hover crosshair to this receiver's linked vizes (slice-4.6).
    *  null = cursor left the canvas. The value is retained so panels that
-   *  mount later (a freshly added "+ viz" tab) can pick it up on first draw. */
+   *  mount later (a freshly added "+ viz" tab) can pick it up on first draw.
+   *
+   *  Slice-6.3: also forwards to the SharedWorker (via `cursorForward`) so
+   *  popouts and other subscribed windows can mirror the cursor. The
+   *  originator skips its own echo via `sourceVizId === vizId`. */
   setCursor(hz: number | null, sourceVizId: string): void {
+    this.cursor = hz == null ? null : { hz, sourceVizId };
+    this.cursorStream.emit(this.cursor);
+    if (this.cursorForward) {
+      this.cursorForward(hz, sourceVizId);
+    }
+  }
+
+  /** Ingest a cursor update that came from the SharedWorker (originated in
+   *  ANOTHER window — slice-6.3). Updates local state + emits on
+   *  `cursorStream` so local vizes draw the crosshair, but does NOT
+   *  re-forward (otherwise we'd echo forever). */
+  ingestRemoteCursor(hz: number | null, sourceVizId: string): void {
     this.cursor = hz == null ? null : { hz, sourceVizId };
     this.cursorStream.emit(this.cursor);
   }

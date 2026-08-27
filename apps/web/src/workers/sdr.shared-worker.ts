@@ -18,12 +18,16 @@
  *    { type: 'subscribe', receiverId }
  *    { type: 'unsubscribe', receiverId }
  *    { type: 'control', receiverId, command: 'setFrequency', value: 14_205_000 }
+ *    { type: 'cursor', receiverId, hz: number|null, sourceVizId: string }
+ *      (slice-6.3: cross-window cursor broadcast — originator skips its own
+ *       echo by comparing sourceVizId in attachCrosshair)
  *
  *  Protocol (worker → client):
  *    { type: 'fft', receiverId, data: ArrayBuffer }
  *    { type: 'audio', receiverId, data: ArrayBuffer }
  *    { type: 'metadata', receiverId, data: ReceiverMetadata }
  *    { type: 'decoder', receiverId, data: DecoderEventEnvelope }
+ *    { type: 'cursor', receiverId, hz: number|null, sourceVizId: string }
  *    { type: 'open', receiverId }
  *    { type: 'close', receiverId, code, reason }
  *
@@ -33,10 +37,13 @@
 import { FFT_HEADER_MAGIC, AUDIO_HEADER_MAGIC } from '@openwebrx-plus/shared-types';
 
 interface ClientMessage {
-  type: 'subscribe' | 'unsubscribe' | 'control';
+  type: 'subscribe' | 'unsubscribe' | 'control' | 'cursor';
   receiverId: string;
   command?: string;
   value?: unknown;
+  /** Cursor payload (only present when type === 'cursor'). */
+  hz?: number | null;
+  sourceVizId?: string;
 }
 
 // SharedWorker scope: this script runs in a SharedWorkerGlobalScope, which is
@@ -63,6 +70,12 @@ workerScope.onconnect = (e: MessageEvent) => {
         break;
       case 'control':
         sendControl(msg.receiverId, msg);
+        break;
+      case 'cursor':
+        // Slice-6.3: broadcast the cursor to every subscriber (including the
+        // originator). The originator's viz skips its own echo via
+        // `sourceVizId === vizId` check in attachCrosshair.
+        fanoutCursor(msg.receiverId, msg.hz ?? null, msg.sourceVizId ?? '');
         break;
       default:
         console.warn('[SharedWorker] unknown message', msg);
@@ -171,5 +184,22 @@ function fanout(receiverId: string, message: unknown, transfer?: Transferable[])
     } else {
       port.postMessage(message);
     }
+  }
+}
+
+/**
+ * Slice-6.3 — broadcast a cursor state to all subscribers of a receiver.
+ *
+ * The cursor is per-receiver: hovering over a canvas in window A publishes
+ * a cursor for receiver R; the worker fans that out to every window that
+ * has subscribed to R, so window B's visualizations of R can draw the
+ * crosshair too. The originator's viz skips its own echo via the
+ * `sourceVizId === vizId` check in `attachCrosshair`.
+ */
+function fanoutCursor(receiverId: string, hz: number | null, sourceVizId: string): void {
+  const subs = subscriptions.get(receiverId);
+  if (!subs) return;
+  for (const port of subs) {
+    port.postMessage({ type: 'cursor', receiverId, hz, sourceVizId });
   }
 }

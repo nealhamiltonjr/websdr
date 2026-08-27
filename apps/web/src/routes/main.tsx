@@ -215,11 +215,35 @@ function useSharedWorker() {
           console.info(`[rx ${msg.receiverId}] WS closed`, msg.code, msg.reason);
           break;
         }
+        case 'cursor': {
+          // Slice-6.3 — cursor state broadcast from another window (popout).
+          // The viz that originated the cursor skips its own echo via
+          // `sourceVizId === vizId` in attachCrosshair.
+          const sess = receiverRegistry.get(msg.receiverId);
+          if (sess) {
+            sess.ingestRemoteCursor(msg.hz, msg.sourceVizId);
+          }
+          break;
+        }
       }
     };
 
     // Subscribe to the default receiver (will trigger SharedWorker to open WS).
     port.postMessage({ type: 'subscribe', receiverId: SLICE_1_RECEIVER_ID });
+
+    // Slice-6.3 — wire the cursor forward sink on every receiver the main
+    // window knows about. Called from `ReceiverSession.setCursor` (mouse over
+    // a canvas), forwards to the SharedWorker which fans out to popouts.
+    // Attach to existing + future receivers via a registry hook.
+    const installCursorForward = (rxId: string) => {
+      const sess = receiverRegistry.getOrCreate(rxId);
+      sess.setCursorForward((hz, sourceVizId) => {
+        port?.postMessage({ type: 'cursor', receiverId: rxId, hz, sourceVizId });
+      });
+    };
+    // Default receiver. Re-adopted receivers set their own forward in
+    // adoptSpawned (the same wiring) — calling it twice is idempotent.
+    installCursorForward(SLICE_1_RECEIVER_ID);
 
     // Slice-4.6: click-to-tune — waterfall/spectrum canvas clicks arrive via
     // the tune bus (viz components have no port access). Tuning the clicked
@@ -311,6 +335,12 @@ function useSharedWorker() {
   const adoptSpawned = (newId: string) => {
     setReceiverIds((prev) => (prev.includes(newId) ? prev : [...prev, newId]));
     port?.postMessage({ type: 'subscribe', receiverId: newId });
+    // Slice-6.3 — wire the cursor forward sink so hovering over this
+    // receiver's canvas broadcasts to popouts (and vice versa).
+    const sess = receiverRegistry.getOrCreate(newId);
+    sess.setCursorForward((hz, sourceVizId) => {
+      port?.postMessage({ type: 'cursor', receiverId: newId, hz, sourceVizId });
+    });
     setTuning((m) => setActive(m, newId));
   };
 
@@ -326,6 +356,9 @@ function useSharedWorker() {
     // Unsubscribe from the SharedWorker (will close the WS if no other
     // subscribers).
     port?.postMessage({ type: 'unsubscribe', receiverId: id });
+    // Slice-6.3 — detach the cursor forward sink before destroying.
+    const sess = receiverRegistry.get(id);
+    if (sess) sess.setCursorForward(null);
     // Drop from the list; if it was active, tuning falls back to rx-default.
     setReceiverIds((prev) => prev.filter((rid) => rid !== id));
     setTuning((m) => dropReceiver(m, id, SLICE_1_RECEIVER_ID));

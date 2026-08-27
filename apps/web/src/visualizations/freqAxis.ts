@@ -34,6 +34,41 @@ export function inSpan(axis: FreqAxis, hz: number): boolean {
   return hz >= axis.centerHz - half && hz <= axis.centerHz + half;
 }
 
+/**
+ * FFT bin index for a given frequency.
+ *
+ * The FFT frames are FftSwap'd (bin 0 = center − rate/2, last bin =
+ * center + rate/2). `binCount` is the number of bins in the Float32Array
+ * (frame.bins.length). Returns null when `hz` is outside the axis span
+ * — callers should treat that as "no reading" rather than clamping,
+ * because clamping would silently report the wrong frequency's level.
+ *
+ * Slice-6.2 — used by the S-Meter / Frequency Counter linked readout so
+ * they can show the signal level / frequency AT the cursor position
+ * (when the user hovers over a sibling FFT canvas).
+ */
+export function binAtHz(axis: FreqAxis, hz: number, binCount: number): number | null {
+  if (binCount <= 0) return null;
+  if (!inSpan(axis, hz)) return null;
+  const frac = fractionAtFreq(axis, hz); // [0, 1] across the axis span
+  // Map [0, 1) → [0, binCount). The `min` guard prevents returning binCount
+  // at exactly the right edge (frac === 1 → binCount is out-of-bounds).
+  return Math.min(binCount - 1, Math.floor(frac * binCount));
+}
+
+/**
+ * Read the FFT bin power (dBFS) at a given frequency.
+ *
+ * Returns null when the frequency is outside the axis span OR when the
+ * bins array is empty / not yet arrived (the first frame carries a
+ * valid FreqAxis but might be replaced before the S-Meter renders).
+ */
+export function binPowerAtHz(axis: FreqAxis, bins: Float32Array, hz: number): number | null {
+  const idx = binAtHz(axis, hz, bins.length);
+  if (idx === null) return null;
+  return bins[idx];
+}
+
 /** A passband as offsets from the tuned frequency, [loHz, hiHz]. */
 export type Passband = readonly [number, number];
 

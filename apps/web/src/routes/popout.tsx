@@ -34,6 +34,16 @@ export function PopoutRoute(): import('solid-js').JSX.Element {
     port.start();
 
     const session = receiverRegistry.getOrCreate(receiverId);
+
+    // Slice-6.3 — wire the cursor forward sink BEFORE any mouseover fires so
+    // the very first cursor event in the popout propagates to the main window.
+    // The popout's viz will call session.setCursor() on mousemove; the sink
+    // forwards to the worker; the worker fans out to all subscribers of this
+    // receiverId, including the main window.
+    session.setCursorForward((hz, sourceVizId) => {
+      port.postMessage({ type: 'cursor', receiverId, hz, sourceVizId });
+    });
+
     port.onmessage = (ev: MessageEvent) => {
       const msg = ev.data;
       if (!msg || typeof msg !== 'object') return;
@@ -68,6 +78,11 @@ export function PopoutRoute(): import('solid-js').JSX.Element {
         } catch (e) {
           console.error('[popout] failed to parse FFT frame', e);
         }
+      } else if (msg.type === 'cursor') {
+        // Slice-6.3 — cursor state broadcast from another window (the main
+        // window or another popout). The viz that originated the cursor
+        // skips its own echo via `sourceVizId === vizId` in attachCrosshair.
+        session.ingestRemoteCursor(msg.hz, msg.sourceVizId);
       }
     };
     port.postMessage({ type: 'subscribe', receiverId });
