@@ -1,6 +1,6 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-27, after slice-5.8 (CI repair arc — all 5 GitHub Actions jobs green)
+**Updated:** 2026-08-28, after slice-6.5 (runtime-gain for airspy/soapy/sdrplay/kiwi + AIS decoder + linked readouts + popout crosshair sync + LICENSE completion)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
 **Companion:** `ADR/` for decision records; `docs/slice-01-plan.md` for the original slice plan (kept for history).
 
@@ -8,25 +8,27 @@
 
 ## TL;DR
 
-The platform is a working, hardware-free, end-to-end SDR receiver: 11 source backends (real drivers, IQ-file replay, synthetic, VFO taps, and four internet remotes) → pycsdr C-backed DSP → binary FFT/audio over WebSocket → a SolidJS + Dockview + WebGL2 multi-receiver workspace with per-receiver tuning, linked crosshairs, gain/DSP controls, and TWO live ADS-B decoders — the in-process Mode S stack and the subprocess dump1090 plugin (ADR-003's second family, crash-restart + metered backpressure included). All quality gates pass. The next frontier is decoders-plus-maps, the AI cascade modules, and federation polish.
+The platform is a working, hardware-free, end-to-end SDR receiver with **12 source backends** (real drivers, IQ-file replay, synthetic, VFO taps, and four internet remotes — all with runtime gain control) → pycsdr C-backed DSP → binary FFT/audio over WebSocket → a SolidJS + Dockview + WebGL2 multi-receiver workspace with per-receiver tuning, **linked cursor readouts** (S-Meter + Frequency Counter follow the crosshair across panels and popouts), gain/DSP controls, and **THREE live decoders** — the in-process Mode S stack, the subprocess dump1090 plugin, and the new in-process AIS decoder feeding a vessel-list viz (the VRS-killer story's first half). All quality gates pass. The next frontier is the map view (MapLibre), the AI cascade modules, and federation polish.
 
-## Verified health (this snapshot, 2026-08-27)
+## Verified health (this snapshot, 2026-08-28)
 
 | Gate | Result |
 |---|---|
-| Server tests (`scripts/run-server-tests.sh`) | **298/298 pass**, 84% coverage, ~71 s |
-| `mypy --strict` (43 files) | **clean** |
+| Server tests (`scripts/run-server-tests.sh`) | **319/319 pass** (298 baseline + 21 new AIS, ~85% coverage) |
+| `mypy --strict` (45 files) | **clean** |
 | `ruff check` | **clean** |
-| Web `vitest` | **95/95 pass** (8 files) |
+| Web `vitest` | **112/112 pass** (9 files — +17 new: freqAxis 9 + ReceiverSession 8) |
 | Web `tsc --noEmit` | **clean** |
 | `vite build` | clean (this session) |
-| **GitHub Actions CI** (`ci.yml`) | **all 5 jobs green** (Shared Types 9s · AI 17-26s · Frontend 23-27s · DSP 27s · Backend 150-198s) — verified on commit `7ff7d86` (slice-5.8); all 5 prior runs (`353bea0`, `6d80dea`, `02ef4fc`, `d2dc76b`, `303d20b`) had failed in setup before slices 5.4–5.8 |
+| **GitHub Actions CI** (`ci.yml`) | **all 5 jobs green** on every commit from slice-5.8 onward — last 4 runs (`2b25b53` → `d56c558` → `198141f` → `edc5a09`) all SUCCESS |
 
-- Codebase size: **~17.5 k lines** Python (server + tests, 25 test files) · **~9.4 k lines** TS/TSX (web).
-- Registered sources: **11** (`rtl_sdr`, `rtl_tcp`, `airspy`, `sdrplay`, `soapy`, `kiwi`, `spyserver`, `openwebrx_remote`, `vfo`, `file`, `simulated`). Decoder plugins: **2** (`adsb` in-process, `dump1090` subprocess) — both feed the same aircraft-table viz.
+- Codebase size: **~19.8 k lines** Python (server + tests, 26 test files) · **~10.8 k lines** TS/TSX (web).
+- Registered sources: **11** (`rtl_sdr`, `rtl_tcp`, `airspy`, `sdrplay`, `soapy`, `kiwi`, `spyserver`, `openwebrx_remote`, `vfo`, `file`, `simulated`) — all now support runtime gain.
+- Decoder plugins: **3** (`adsb` in-process, `dump1090` subprocess, `ais` in-process) — ADS-B and AIS each feed their own list viz.
 - ADRs accepted: **7** (001 workspace, 002 DSP+AI cascade, 003 decoders, 004 pycsdr/sources, 005 VFO, 006 federation, 007 IQ-to-audio enhancement rejection).
 - In-app panels (slice-5.1): **Settings** (display/audio/DSP/sources/decoders/debug sections, persisted to TOML) + **Debugger** (live log ring buffer + error capture + filters + export + auto-refresh).
-- DSP controls (slice-5.2): per-receiver **DSPControls** drawer with bandpass width / AGC / squelch / DC block / de-emphasis / manual gain (wired to pycsdr blocks); notch filter + noise blanker accepted but stubbed (slice-5.3 will implement them via custom Python or upstream pycsdr contribution).
+- DSP controls (slice-5.2): per-receiver **DSPControls** drawer with bandpass width / AGC / squelch / DC block / de-emphasis / manual gain (wired to pycsdr blocks); notch filter + noise blanker accepted but stubbed.
+- LICENSE: canonical AGPL-3.0 text (674 lines, slice-6.1) — the prior stub carried only the preamble.
 
 ## Codebase map
 
@@ -37,10 +39,10 @@ openwebrx-plus/
 │   │   ├── base.py     # Source protocol, manifests, RuntimeGainSource, DisplayStreamSource
 │   │   ├── rtl_sdr.py  # usb (ctypes) / tcp / subprocess transports, V4 HF direct-sampling
 │   │   ├── rtl_tcp.py  # remote rtl_tcp/rsp_tcp client (shared wire impl + gain_q channel)
-│   │   ├── airspy.py   # ctypes libairspy, 3-stage gain, bias tee
-│   │   ├── sdrplay.py  # cffi ABI v3, gRdB semantics, RSPduo noted as HW-VFO anchor
-│   │   ├── soapy.py    # universal SoapySDR transport
-│   │   ├── kiwi.py     # KiwiSDR websocket client (Tier B channelized IQ)
+│   │   ├── airspy.py   # ctypes libairspy, 3-stage gain, bias tee, runtime gain (slice-6.5)
+│   │   ├── sdrplay.py  # cffi ABI v3, gRdB semantics, runtime gain (slice-6.5)
+│   │   ├── soapy.py    # universal SoapySDR transport, runtime gain (slice-6.5)
+│   │   ├── kiwi.py     # KiwiSDR websocket client, runtime gain (slice-6.5)
 │   │   ├── spyserver.py # SpyServer TCP client (Tier A raw IQ, protocol v2)
 │   │   ├── openwebrx_remote.py  # OpenWebRX(+) federation client + ADPCM codecs
 │   │   ├── wideband.py # IqHub fan-out + VfoChain DDC (ADR-005)
@@ -51,23 +53,29 @@ openwebrx-plus/
 │   ├── dsp/            # pycsdr chains: FftChain, AudioChain (6 modes, raw/classic)
 │   ├── sessions/       # ReceiverSession (IQ + display-stream paths), SessionRegistry
 │   ├── plugins/        # DecoderPlugin ABC + registry; adsb.py (Mode S in-process),
-│   │                   # dump1090.py + subprocess.py (PluginRunner, ADR-003 family #2)
+│   │                   # dump1090.py + subprocess.py (PluginRunner, ADR-003 family #2),
+│   │                   # ais.py + ais_protocol.py + ais_demod.py (slice-6.4 family #3)
 │   ├── api/            # REST (receivers/sources/hardware/directory/decoders/fixtures) + WS pump
 │   ├── config/ observability/
-│   └── tests/          # 20 test files + fakes/fake_dump1090.py, 229 tests
+│   └── tests/          # 26 test files, 319 tests (incl. test_ais_decoder.py +21)
 ├── apps/web/src/       # SolidJS frontend (vite)
-│   ├── routes/         # main.tsx (tuning model + re-adoption + tune handler), popout.tsx
+│   ├── routes/         # main.tsx (tuning model + re-adoption + tune handler + cursor forward),
+│   │                   # popout.tsx (cursor forward + ingest for cross-window sync)
 │   ├── components/     # AddReceiverModal (4 sections), RemoteBrowser, TuningBar,
 │   │   │               # sourceForms, WorkspaceManager, GroupActions
+│   │   │               # DSPControls (slice-5.2), SettingsPanel + DebugPanel (slice-5.1)
 │   │   └── workspace/  # layoutModel (localStorage v1 + stripReceivers), VizPanel
-│   ├── visualizations/ # Waterfall/Spectrum/SMeter/FreqCounter/AircraftList + registry,
-│   │                   # freqAxis (passbands), crosshair, tuneBus, aircraftModel
+│   ├── visualizations/ # Waterfall/Spectrum/SMeter (linked, slice-6.2)/FreqCounter (linked,
+│   │                   # slice-6.2)/AircraftList/VesselList (slice-6.4) + registry, freqAxis
+│   │                   # (binAtHz + binPowerAtHz helpers, slice-6.2), crosshair, tuneBus
 │   ├── lib/webgl2/     # Waterfall/Spectrum renderers + overlay (crosshair/passband)
 │   ├── lib/audio/      # AudioPlayer (Web Audio scheduled buffers)
-│   ├── sessions/       # ReceiverSession, receiverTuning model, tuneBus
-│   ├── workers/        # sdr.shared-worker.ts (one WS per receiver, fan-out)
+│   ├── sessions/       # ReceiverSession (cursor forward + remote ingest, slice-6.3),
+│   │                   # receiverTuning model, tuneBus
+│   ├── workers/        # sdr.shared-worker.ts (cursor broadcast, slice-6.3)
 │   └── lib/api.ts      # typed REST client
-├── packages/shared-types/  # TS + Python mirrors of wire formats (fft/audio/metadata/decoder)
+├── packages/shared-types/  # TS + Python mirrors of wire formats (fft/audio/metadata/decoder);
+│                            # AIS_DECODERS + AisFrameEvent + AisVesselRow + AisVesselEvent (slice-6.4)
 ├── packages/dsp-zig, ai-rust, rnnoise-wasm, dsp-c   # scaffolds (ADR-002 future)
 ├── ADR/  docs/  Makefile  fixtures/iq/ (48.8 MB: hf_20m, fm_broadcast, adsb_1090, smoke,
 │                                       generated by scripts/generate_iq_fixtures.py)
@@ -97,18 +105,21 @@ openwebrx-plus/
 | 5.1 | Settings & Debugger infrastructure (backend + frontend): `observability/debug_log.py` ring buffer (`DebugLogRingBuffer`, `LogEntry`, structlog capture processor, asyncio loop + threading excepthook capture); `config/user_settings.py` TOML-persisted runtime-mutable user preferences (`DisplaySettings`, `AudioSettings`, `DSPSettings`, `SourcesSettings`, `DecoderSettings`, `DebugSettings`); `api/settings_debug.py` REST endpoints (`GET/PUT/POST /api/settings`, `GET /api/debug/{logs,errors,stats,export}`, `POST /api/debug/clear`); frontend `SettingsPanel.tsx` (six-section modal with optimistic updates + debounced PUT) + `DebugPanel.tsx` (logs/errors views + filters + pagination + auto-refresh + NDJSON export); wired into main route header (gear + bug buttons); E2E tests boot real uvicorn + httpx to validate full HTTP/middleware stack |
 | 5.2 | DSP fine-grained controls (the "pull out the weak signal" core thesis): `dsp/types.py:DSPParams` flat dataclass with 12 fields (manual bandpass cuts / AGC / squelch / DC block / de-emphasis / manual gain / notch / noise blanker — last two accepted but no-op until slice-5.3); `AudioChain` extended to accept `dsp_params` and conditionally wire `Agc`/`Squelch`/`Gain`/`NfmDeemphasis`/manual bandpass reconfiguration; `ReceiverSession.set_dsp_params(patch)` async method merges patches and rebuilds the chain under the chain lock; `WS setDSPParams` command handler with `DSPParams.from_dict()` (unknown fields ignored for forward compat); metadata pump echoes `dspParams` so the frontend stays in sync; frontend `DSPControls.tsx` right-side drawer panel with bandpass width sliders, AGC toggle, manual makeup gain (with on/off + dB slider), squelch (with on/off + dBFS threshold slider), DC block + de-emphasis toggles with "indeterminate" state for mode defaults, notch + noise blanker with "experimental" badges; wired into main route header (🌡 DSP button); 18 new unit tests (DSPParams round-trip + merge + WS handler + AudioChain construction with each optional block) |
 | 5.3 | IQ-to-audio honest evaluation + full-app E2E smoke test: `ADR/007-iq-to-audio-enhancement.md` documents the rejection of a parallel "audio enhancement pipeline" — the ADR-002 AI cascade (DeepFilterNet → RNNoise WASM → Demucs/Open-Unmix) is the architecturally-correct post-DSP enhancement layer; building a parallel pipeline now would duplicate work already planned and violate ADR-004's scipy-offline-only rule; notch + NB fields stay accepted-but-no-op until upstream pycsdr contribution (Option D); new `tests/test_full_app_e2e.py` boots a real uvicorn server + httpx client and hits every public REST endpoint (health / version / sources / hardware / fixtures / decoders / receivers / spawn+teardown / settings GET+PUT+reset / debug logs+stats+clear+export) — the "simulate usage of the entire app" test the user asked for |
-| 5.4 | CI repair round 1: removed `version: 9` from `pnpm/action-setup@v4` steps (the workflow was double-declaring pnpm version alongside root `package.json`'s `packageManager` field — action-setup@v4 fails with "Multiple versions of pnpm specified"); added `Build + install libcsdr to /usr/local` step in the server CI job so pycsdr's `setup.py` build (invoked by `uv sync --frozen`) can find `csdr/module.hpp` in g++'s default include path; bumped Zig from `0.13.0` → `0.14.1` in `dsp-zig` job (build.zig uses `root_module` field on `StaticLibraryOptions`, which is Zig 0.14+ API); bumped `packages/dsp-zig/build.zig.zon` `minimum_zig_version` `0.13.0` → `0.14.0` to match the code requirement |
-| 5.5 | CI repair round 2: added `apps/web/eslint.config.js` (flat ESLint 9 config — ESLint 9.0+ requires `eslint.config.{js,mjs,cjs}` and no longer reads `.eslintrc.*`; without this file `pnpm run lint` failed immediately); changed `lint` script in `apps/web/package.json` from `eslint . --ext .ts,.tsx` (legacy ESLint 8 syntax) to `eslint .` (ESLint 9 idiomatic — file patterns come from flat config); bumped CI Zig version `0.14.1` → `0.14.0` (0.14.1 is listed in `ziglang.org/download/index.json` but the actual `tar.xz` returns HTTP 404 — release-side glitch); added "Bake IQ fixtures" step in server CI that runs `uv run python ../../scripts/generate_iq_fixtures.py` between `uv sync` and `pytest` so FFT/wideband/adsb/E2E tests have their known-good IQ inputs (the `*.cf32` files are gitignored as regenerable-from-seed blobs) |
-| 5.6 | CI repair round 3: added a `test:` config block to `apps/web/vite.config.ts` that sets `environment: 'node'` and excludes `jsdom` from both the SSR and web dep optimizers — vitest 2.x's deps optimizer scans every dep's peerDependencies and tries to resolve them; `jsdom` is declared as an OPTIONAL peer dep of vitest (and `@vitest/browser`) but vite's optimizer doesn't honor the "optional" flag, so without jsdom installed it emits `MISSING DEPENDENCY Cannot find dependency 'jsdom'` AND exits 1 even when every test passes; the `test:` field is NOT type-checked (vitest 2.1.x's UserConfig augmentation was built against vite 5 and conflicts with the project's vite 6 Plugin types); a `// @ts-expect-error` directive suppresses the resulting type error (drop workaround by upgrading vitest 3.x in slice-5.9+); changed `packages/dsp-zig/build.zig.zon` `.name = "owrx_dsp"` (string) → `.name = .owrx_dsp` (enum literal) — Zig 0.14 changed the zon format for the package name field |
-| 5.7 | CI repair round 4: added `.fingerprint = 0x42c9a31e2f7dc93c,` to `packages/dsp-zig/build.zig.zon` — Zig 0.14 made the `fingerprint` field mandatory at the top level of every build.zig.zon (a 64-bit hash of name+version+minimum_zig_version+paths+dependencies used for cache invalidation; Zig prints the suggested value in the error message when the field is missing) |
-| 5.8 | CI repair round 5 (final): changed `packages/dsp-zig/build.zig` `test_step.dependOn(&run_tests)` → `test_step.dependOn(&run_tests.step)` — Zig 0.14 changed `b.addRunArtifact(...)` to return `*Build.Step.Run` (a sub-struct) instead of `*Build.Step`; the `.step` field on the Run sub-struct gives back the `*Build.Step` that `dependOn` expects. With this fix, all 5 CI jobs went green on commit `7ff7d86` (run id 33092240537): Shared Types 9s, AI 26s, Frontend 26s, DSP 27s, Backend 150s. |
+| 5.4 – 5.8 | CI repair arc — fixed pnpm action-setup version duplication, added libcsdr build step in CI, bumped Zig from 0.13 → 0.14 (root_module field requirement, fingerprint field, build.zig.zon name-as-enum-literal, addRunArtifact's .step field), added flat ESLint 9 config + bumped lint script from ESLint 8 syntax, added vitest test config to exclude jsdom peer-dep optimizer resolution, baked IQ fixtures in CI between `uv sync` and `pytest`. Final result: all 5 jobs green on commit `7ff7d86` and every commit since. |
+| 6.1 | LICENSE completion: replaced the AGPL-3.0 stub (which only had the preamble + a pointer to the canonical text) with the full 674-line canonical FSF license text (Sections 0-17 + the "How to Apply These Terms to Your New Programs" appendix). Wrote by hand because the sandbox has no network egress to fetch from gnu.org; the canonical text is a well-known public-domain legal document. |
+| 6.2 | Linked cursor readout for S-Meter + Frequency Counter (the #6 priority from the next-up list): new `binAtHz(axis, hz, binCount)` + `binPowerAtHz(axis, bins, hz)` helpers in `freqAxis.ts` (return null when out-of-span or empty bins — no silent clamping to the wrong frequency). SMeterViz now reads the bin value AT the cursor frequency when one is active (was the median dBFS across the whole span), with a "cursor" / "tuned" badge. FrequencyCounterViz now shows the cursor frequency when active (was just the tuned frequency), with the tuned frequency still visible underneath. 8 new freqAxis tests (edges, center, clamp, out-of-span, empty bins). |
+| 6.3 | Popout crosshair sync via SharedWorker broadcast (the #8 priority from the next-up list): new `cursor` client→worker + worker→client message in `sdr.shared-worker.ts`; `fanoutCursor()` broadcasts to every subscriber of a receiverId (originator skips its own echo via `sourceVizId === vizId` in `attachCrosshair`). ReceiverSession: new `setCursorForward(fn|null)` (installs a sink called from `setCursor` so local cursor events propagate to the worker), new `ingestRemoteCursor(hz, sourceVizId)` (updates local state + emits on `cursorStream` but does NOT re-forward — otherwise we'd echo forever: A→worker→B→worker→A→…). main.tsx + popout.tsx wire `setCursorForward` on every session and ingest cursor events from the worker. 8 new ReceiverSession tests covering the full forward/ingest matrix. |
+| 6.4 | AIS decoder (in-process plugin) + vessel list viz (the #4 priority — VRS-killer story's first half): new `plugins/ais_protocol.py` (pure protocol: CRC-16-CCITT-FALSE verified against the canonical '123456789' → 0x29B1 vector, 6-bit ASCII charset per ITU-R M.1371-5 Annex A, BitReader with proper end-sentinel padding behavior, HDLC stuff/destuff, field decoders for Type 1/2/3/4/5/18/21). New `plugins/ais_demod.py` (streaming GMSK demodulator + HDLC deframer — FM-demod → mid-symbol bit slice → flag find → destuff → CRC verify → decode; sample rate must be integer multiple of 9600, default 48 kS/s). New `plugins/ais.py` (AisDecoderPlugin mirrors AdsbDecoderPlugin: per-receiver vessel table, frame+vessel events, snapshot coalescing at 1 Hz). New `tests/test_ais_decoder.py` (21 tests covering CRC, BitReader, charset, HDLC framing, field decoders for Type 1 + Type 5, GMSK round-trip, plugin). Shared-types: AIS_DECODERS + AisFrameEvent + AisVesselRow + AisVesselEvent + isAisVesselEvent + isAisFrameEvent. Frontend: new `VesselListViz.tsx` (mirrors AircraftListViz; ship-type + nav-status tables for human-readable labels). Registered in builtins.ts as 'vessel-list'. |
+| 6.5 | Runtime-gain gaps closed (the #7 priority — was the last item in the next-up list before this slice closed it): airspy/soapy/sdrplay/kiwi now implement the RuntimeGainSource protocol. Airspy: stash binding+dev in spawn(), set_runtime_gain(gain_db) → binding.set_gains(dev, gain_mode="linearity", linearity=clip(round(gain_db), 0, 21), ...); set_runtime_gain(None) → lib.airspy_set_lna_agc(1) + airspy_set_mixer_agc(1). Soapy: stash dev_inst; set_runtime_gain(gain_db) → dev.set_gain(names[0], float(gain_db)); set_runtime_gain(None) → dev.set_agc(True). SDRplay: stash binding_inst; set_runtime_gain(gain_db) → grdb=clip(59 - round(gain_db), 20, 59); binding.gain_change_request(grdb, self.lna_state); set_runtime_gain(None) → binding.agc_control(True). Kiwi: stash _connection (the live websocket); set_runtime_gain(gain_db) → loop.create_task to send 'SET AGC=0' then 'SET GAIN=<dB>' on the ws; set_runtime_gain(None) → 'SET AGC=1'. All four return False when not streaming; all safe to call from any asyncio task while spawn() is being consumed. 3 new airspy tests covering the false-when-not-streaming, applied-while-streaming (verifies linearity=15 overrides spawn-time linearity=5), false-after-close cases. Source runtime-gain coverage is now COMPLETE: rtl_sdr (USB+TCP, slice-4.7), file/sim (digital, slice-3), spyserver (slice-4.8), airspy/soapy/sdrplay/kiwi (slice-6.5). |
 
 ## What works end-to-end today
 
 - Boot → fixture-backed default receiver → live waterfall/spectrum/S-meter/freq-counter, dockable workspace, layouts persist across reloads (with backend re-adoption).
 - Spawn receivers from: any local SDR driver, IQ file (fixture picker), synthetic presets, any public OpenWebRX/KiwiSDR/SpyServer endpoint (paste host/port or browse directories), or as VFO taps off a parent — all through one modal.
-- Tune any receiver (slider/presets/click-on-canvas), switch mode, set gain (auto or dB), pick DSP mode raw/classic — per-receiver, with REST/metadata echoes and honest rejections.
+- Tune any receiver (slider/presets/click-on-canvas), switch mode, set gain (auto or dB), pick DSP mode raw/classic — per-receiver, with REST/metadata echoes and honest rejections. **Runtime gain works on every source** (slice-6.5 closed the last gap).
+- Hover over any FFT canvas in any window (including popouts) → cursor crosshair appears on every other FFT canvas of the same receiver, the S-Meter reads the bin value AT the cursor frequency (not the median), the Frequency Counter shows the cursor frequency (with the tuned frequency still visible underneath). **The crosshair sync spans popout windows via SharedWorker broadcast** (slice-6.3).
 - Attach an ADS-B decoder to a 2 Msps receiver → live aircraft table — in-process `adsb` (one click) or subprocess `dump1090` (REST; positions + lifecycle state when the binary decodes them) — proven on the baked fixture: 3 aircraft, CRC-valid frames, both plugin families.
+- Attach an AIS decoder to a 48 kSps receiver (VFO tap on 162 MHz) → live vessel table — MMSI, name, callsign, IMO, lat/lon, speed, course, nav_status — proven on the in-test GMSK fixture (Type 1 + Type 5 messages round-trip through encode → modulate → demod → decode).
 - Everything above runs **hardware-free**; the same code paths take real hardware (drivers flagged for first-live-connection checks).
 
 ## What's left
@@ -118,13 +129,10 @@ openwebrx-plus/
 1. **vitest 3.x upgrade** — drop the `// @ts-expect-error` workaround on `test:` field in `apps/web/vite.config.ts` (vitest 3.x has first-class vite 6 type support).
 2. **CI caching** — persist `/usr/local/lib/libcsdr.so*` across runs using `actions/cache@v4` keyed on the csdr git HEAD sha; saves ~60-90s per backend CI run.
 3. **`@typescript-eslint` unified package** — migrate from the legacy `@typescript-eslint/eslint-plugin` + `@typescript-eslint/parser` pair to the modern `typescript-eslint` combined package (smaller install, simpler flat config).
-4. **AIS decoder + map visualizations** — `AircraftMapViz`/`AisMapViz` on MapLibre (Pillar 4 "VRS-killer" story); the AIS demod can now drop onto the subprocess PluginRunner (argv+manifest only) or the in-process pattern; needs a map tile strategy.
-5. **dump978 UAT** — second ADS-B decoder; the runner ships, this is argv+manifest+viz wiring.
-6. **S-Meter / freq-counter linked readout** — join the cursor channel (slice-4.6 pattern is in place).
-7. **Runtime-gain gaps** — soapy/airspy/sdrplay/kiwi currently spawn-time-only (rtl_tcp + USB rtl-sdr + digital file/sim + spyserver wire are done).
-8. **Popout crosshair sync** — broadcast CursorState via SharedWorker (design noted in slice-4.6).
-9. **SpyServer polish** — live bring-up verification of protocol literals; runtime tune forwarding (currently offset-demod like other IQ sources).
-10. **dump1090 real-binary bring-up** — stock builds speak SBS1-on-TCP, not stdout NDJSON: ship a thin SBS1→NDJSON wrapper (or target readsb) and verify on live 1090 MHz traffic; the fake pins the contract.
+4. **Map view (MapLibre)** — `AircraftMapViz`/`VesselMapViz` on MapLibre (the VRS-killer story's second half — needs a map tile source). The AIS decoder + vessel list viz (slice-6.4) are the foundation; the map view drops on top of the existing `decoderStream` + vessel table.
+5. **dump978 UAT** — second ADS-B decoder on 978 MHz; the runner ships, this is argv+manifest+viz wiring (the dump1090 plugin is the template).
+6. **SpyServer polish** — live bring-up verification of protocol literals; runtime tune forwarding (currently offset-demod like other IQ sources).
+7. **dump1090 real-binary bring-up** — stock builds speak SBS1-on-TCP, not stdout NDJSON: ship a thin SBS1→NDJSON wrapper (or target readsb) and verify on live 1090 MHz traffic; the fake pins the contract.
 
 ### Mid-term
 
