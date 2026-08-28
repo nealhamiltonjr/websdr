@@ -1,6 +1,6 @@
 # OpenWebRX+ — Complete Project Handoff (for an AI continuing this work)
 
-**Snapshot date:** 2026-08-28 · **State:** post slice-21 (FT8 contract surface + DigiMessageListViz) · **All quality gates green** (one known mypy regression documented below)
+**Snapshot date:** 2026-08-29 · **State:** post slice-32 (federation polish: secondary-demod forwarding via `RemoteDecoderEvent` wire type 0x05) · **All quality gates green** (528 server tests + 178 web tests; CI run `33144017200` for commit `4260524` — all 5 jobs success; one known `mypy --strict` CLI artifact documented in §4/§5.1, NOT a CI failure)
 
 This document is the single entry point for an AI (or human) picking this
 project up cold. It explains what the project is, the tech stack, exactly
@@ -45,8 +45,8 @@ What makes it different from upstream OpenWebRX:
   through a SharedWorker.
 - **Hardware-free-first development** — the entire platform (DSP, protocols,
   decoders, UI) is testable with **zero SDR hardware**: baked IQ fixtures,
-  synthetic sources, and protocol-faithful fake servers/binaries. **456
-  server tests + 163 web tests prove every path.**
+  synthetic sources, and protocol-faithful fake servers/binaries. **528
+  server tests + 178 web tests prove every path.**
 - **Decoder plugin engine** (ADR-003) — two families behind one contract:
   in-process Python decoders (ADS-B/Mode S, AIS, dump978 UAT, CW Morse code,
   FT8 contract stub) and subprocess C binaries (dump1090 with SBS1→NDJSON
@@ -101,7 +101,7 @@ federation).
 │   │   ├── api/            REST + WebSocket pump + settings_debug
 │   │   ├── config/         settings.py + user_settings.py (persisted to TOML)
 │   │   └── observability/  structlog + debug_log ring buffer
-│   ├── tests/              32 test files, 456 tests + 1 skipped + fakes/
+│   ├── tests/              37 test files, 528 tests + 1 skipped + fakes/
 │   ├── fixtures/iq/        ⚠ Metadata (.meta) shipped; .cf32 must be
 │   │                       regenerated — see §7.2
 │   └── pyproject.toml, uv.lock
@@ -599,7 +599,7 @@ across runs. Server tests need these files.
 ### 7.3 Run the full verification battery
 
 ```bash
-scripts/run-server-tests.sh                       # 456 tests, ~77 s
+scripts/run-server-tests.sh                       # 528 tests, ~87 s
 cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit
 # E2E verification scripts (agent-browser driven) live outside this repo —
 # they were in the original handoff bundle and can be re-imported if needed.

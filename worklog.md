@@ -1215,3 +1215,37 @@ Stage Summary:
 - Operator UX improvement: an operator chaining OpenWebRX+ peers (e.g. a remote SDR at a friend's QTH feeding their local OpenWebRX+ instance) now sees decoded FT8 messages / aircraft tracks in their own UI, sourced from the upstream receiver. Legacy OpenWebRX / KiwiSDR / SpyServer peers never send 0x05 — the decode branch is a graceful no-op for them.
 - The "remote: true" field in the JSON envelope tags these events for the frontend; a follow-up frontend slice can optionally render a "remote" badge on the digi-message row. (No frontend changes in this slice.)
 - All local gates verified green on HEAD before push: mypy 60 files clean / ruff clean / server 528+1 / web tsc clean / web vitest 178.
+
+---
+Task ID: 33
+Agent: super-z (main agent)
+Task: Generate a new handoff ZIP containing the complete codebase + updated STATUS.md/AI-HANDOFF.md, covering everything since project start. User explicit request.
+
+Work Log:
+- Read prior session summary to understand: project is at commit b94554c (slice-32b backfill), all slices 1-32 committed and pushed, CI green (run 33144017200 for 4260524).
+- Verified working tree: only `package.json` modified + `bun.lock` untracked — both accidental byproducts of an environment initialization (the project uses pnpm per pnpm-workspace.yaml; the bun.lock + "workspaces" addition to package.json would have conflicted with the existing pnpm-workspace.yaml).
+- Cleaned working tree: `git checkout -- package.json` + `rm -f bun.lock`. Working tree clean (only docs remained to be updated).
+- Inspected docs: `docs/AI-HANDOFF.md` §1 header still said "post slice-21" (slice-30 had updated §4 and §5.1-5.4 but missed the header); `docs/STATUS.md` header said "post slice-29" (slices 30, 31, 32 not reflected in the addendum or health table).
+- Updated `docs/AI-HANDOFF.md`:
+  * §1 header: "post slice-21 (FT8 contract surface + DigiMessageListViz)" → "post slice-32 (federation polish: secondary-demod forwarding via RemoteDecoderEvent wire type 0x05)" with CI run + test counts inline.
+  * §1 hardware-free-development bullet: "456 server tests + 163 web tests" → "528 server tests + 178 web tests".
+  * §3 codebase map: "32 test files, 456 tests + 1 skipped" → "37 test files, 528 tests + 1 skipped".
+  * §7.3 run-server-tests comment: "456 tests, ~77 s" → "528 tests, ~87 s".
+- Updated `docs/STATUS.md`:
+  * Header: "post slice-29 (FT8 v2.1...)" → "post slice-32 (federation polish follow-up: secondary-demod forwarding via RemoteDecoderEvent wire type 0x05)".
+  * Slice 15-29 addendum → Slice 15-32 addendum: appended slice-30 (docs refresh), slice-31 (dump1090 fixture improvements), slice-32 (decoder-event federation wire type) detail blocks.
+  * Health table: server tests row 504 → 528 (+116 from slices 15-32); CI row fd7c98c/33142141112 → 4260524/33144017200.
+  * Codebase size: ~32.5k Python / 35 test files → ~34.5k Python / 37 test files.
+  * Federation polish mid-term bullet: marked secondary-FFT forwarding as shipped (slice-22), decoder-event forwarding as shipped (slice-32), only SDRangel audio-over-WS remains deferred.
+  * TL;DR: appended "RemoteDecoderEvent wire type 0x05" mention alongside the existing 'WRSF' secondary FFT wire format.
+- Investigated ZIP size anomaly: first build produced 308 MB (vs prior session's 176 MB). Found 184 MB unreachable loose blob in `.git/objects/f9/6cb8c9c421b33122c68e7ea532e98044b35c9b` — this was the 184 MB ZIP accidentally committed during an earlier session, then `git reset --soft a76a04e` removed from history but the loose blob was never pruned. `git fsck --unreachable` reported 999 unreachable objects.
+- First prune attempt failed: `git gc --prune=now` REPACKED the unreachable blob into a new 260 MB pack without actually pruning it (because the blob was reachable from a reflog entry that hadn't expired past the default 90-day window).
+- Correct prune: `git reflog expire --expire-unreachable=now --all && git gc --prune=now --aggressive`. Result: `.git` shrank from 309 MB → 1.3 MB; the 184 MB blob + 998 other unreachable objects all gone. `git fsck --unreachable` now reports 0 unreachable objects.
+- Rebuilt the handoff ZIP. Final size: 6.2 MB (was 308 MB before prune, was 176 MB in prior session which itself was bloated by the unpruned loose blob in .git/objects/). 481 files. Verified top-level entries include all docs, ADRs, AGENTS.md, ARCHITECTURE.md, SYNC-UP.md, LICENSE, .git/, .github/workflows/, apps/, packages/, scripts/, fixtures/iq/ metadata, etc.
+- Verified the ZIP contains the freshly-updated docs: docs/STATUS.md (43,050 bytes, mtime 2026-08-28 16:08) + docs/AI-HANDOFF.md (43,222 bytes, mtime 2026-08-28 16:07) + worklog.md (93,209 bytes). All current.
+
+Stage Summary:
+- New handoff ZIP at `/home/z/my-project/download/openwebrx-plus-handoff-20260828.zip` (6.2 MB, 481 files) — contains the complete codebase (apps/server + apps/web + packages/* + scripts/ + ADR/ + docs/ + worklog.md + LICENSE + AGENTS.md + ARCHITECTURE.md + SYNC-UP.md + .github/workflows/ci.yml + .git/ with full 53-commit slice-1→slice-32 history) AND the freshly-updated docs/AI-HANDOFF.md + docs/STATUS.md (both now honestly reflect post-slice-32 state).
+- Critical hygiene fix: ran `git reflog expire --expire-unreachable=now --all && git gc --prune=now --aggressive` to evict the 184 MB unreachable blob (from a prior session's accidental commit) from `.git/objects/`. .git shrank 309 MB → 1.3 MB. The repo is now properly sized — the prior 176 MB ZIP was itself bloated because that blob was still loose in .git/objects when the prior ZIP was built.
+- No new slice work in this task — only docs refresh + zip regen + repo hygiene. All slice 1-32 work was already committed and pushed in prior sessions; CI is green (run 33144017200 for 4260524 = slice-32).
+- Local-only commit pending push: this slice-33 commit (docs refresh + worklog append). No fresh GitHub PAT was provided in this session; the commit lives locally until the user provides one for the next sync-up.
