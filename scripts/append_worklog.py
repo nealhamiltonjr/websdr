@@ -4,53 +4,49 @@ from pathlib import Path
 
 NEW_ENTRY = """
 ---
-Task ID: 31
+Task ID: 32
 Agent: super-z (main agent)
-Task: Slice-31 — dump1090 fixture improvements (AI-HANDOFF.md \u00a75.6). Implement (1) auto-detect dump1090-fa/mutability/readsb fork identity in the SBS1 bridge; (2) auto-discovery of a running dump1090 SBS1 server in the dump1090 plugin; (3) two new failure modes in fake_dump1090.py for the runner's vanish/partial-JSON recovery paths.
+Task: Slice-32 — federation polish follow-up: secondary-demod forwarding for openwebrx_remote (closes the AI-HANDOFF.md \u00a75.7 sub-bullet). Decoder events from upstream OpenWebRX+ peers should reach the client's viz panels.
 
 Work Log:
-- Read AI-HANDOFF.md \u00a75.6: three deliverables \u2014 (a) auto-detect dump1090-fa vs mutability; (b) --net-ro-port auto-discovery; (c) extend fake_dump1090 failure modes (TCP-EOF mid-handshake, malformed CSV, partial JSON row).
-- Inspected existing scripts/sbs1_to_ndjson.py + apps/server/openwebrx_plus/plugins/dump1090.py + apps/server/tests/fakes/fake_dump1090.py + apps/server/tests/test_sbs1_bridge.py + apps/server/tests/test_subprocess_plugins.py to understand the existing failure mode surface (--crash-after, --garbage-lines, --stall-secs, --echo-stats) and the existing test patterns (_FakeSbs1Server, _spec/_plugin helpers, restart_backoff=(0.05,) for fast tests).
-- Designed slice-31 scope:
-  * Fork auto-detect: probe <bin> --version (or -V for readsb) once at startup; grep for known fork signatures ("dump1090-fa" / "dump1090-mutability" / "readsb"); report in the ready event. Override via OPENWEBRX_PLUS_DUMP1090_FORK env var.
-  * Auto-discovery: if OPENWEBRX_PLUS_DUMP1090_BIN is unset, probe 127.0.0.1:30003 (the standard SBS1 port for dump1090-fa/mutability/readsb). If reachable, default to the SBS1 bridge script in --no-spawn mode against that endpoint \u2014 operators with a running dump1090 service need no extra config.
-  * Failure modes: --vanish-after-ready-secs N (emit ready, sleep, close stdout, exit cleanly \u2014 tests the runner's "decoder vanished after ready" path) + --emit-partial-json-die (emit ready, write truncated JSON, exit 0 \u2014 tests the runner's JSON parser recovery).
-- Implemented _probe_fork(binary) + _resolve_fork() in scripts/sbs1_to_ndjson.py:
-  * Subprocess.run with 1.0s timeout, never raises.
-  * Order matters in the signature matching: "mutability" checked before "fa" (mutability's version string also contains "dump1090" but not "fa"); "readsb" has no "dump1090" in its output at all.
-  * Bare "dump1090 1.x" version strings (no -fa suffix) treated as fa-shaped (most modern forks are fa-derived).
-  * Override path: invalid override value falls back to "unknown" and warns on stderr.
-- Added "fork" field to the ready event emitted by sbs1_to_ndjson.py.
-- Implemented _probe_local_sbs1(host, port, timeout_s) + _bridge_script_path() + auto-discovery branch in apps/server/openwebrx_plus/plugins/dump1090.py:
-  * Best-effort TCP probe: socket.create_connection with timeout; OSError \u2192 False; never raises.
-  * _bridge_script_path resolves scripts/sbs1_to_ndjson.py via Path(__file__).parents[4] (plugins/ \u2192 openwebrx_plus/ \u2192 apps/server/ \u2192 apps/ \u2192 repo root). Returns bare filename as fallback if the script doesn't exist (operator's PATH must include it).
-  * _default_spec: when OPENWEBRX_PLUS_DUMP1090_BIN is unset AND _probe_local_sbs1 returns True, returns a SubprocessSpec pointing at "python3 <bridge_path> --no-spawn --connect-host 127.0.0.1 --connect-port 30003" with ready_timeout=5.0; otherwise falls through to the legacy "dump1090" default.
-  * Restructured nested if (SIM102) into flat bin_unset + sbs1_reachable intermediate variables \u2014 same logic, ruff-clean.
-- Bumped dump1090 plugin manifest version 0.1.0 \u2192 0.2.0; extended description to mention auto-discovery + fork detection.
-- Added two new failure modes to apps/server/tests/fakes/fake_dump1090.py:
-  * --vanish-after-ready-secs N: emit ready, sleep N secs, close stdout, sleep 0.1s for stdout reader to wake, return (Python runtime exits cleanly).
-  * --emit-partial-json-die: emit ready, write a truncated JSON line ('{"kind": "frame", "icao": "ABC123", "raw": "this line is deliberately truncated,,,'), close stdout, exit 0.
-- Wrote tests:
-  * tests/test_sbs1_bridge.py extended with TestForkAutoDetect (8 tests): probe returns "fa" for dump1090-fa + bare dump1090 1.x; "mutability"; "readsb"; None for unrecognized output; None for missing binary; _resolve_fork honors OPENWEBRX_PLUS_DUMP1090_FORK override; returns "unknown" when probe fails; warns on invalid override value. Added assertion to existing test_bridge_translates_sbs1_to_ndjson that the ready event includes a "fork" field.
-  * tests/test_dump1090_plugin.py (NEW, 9 tests): _probe_local_sbs1 returns True when a server is listening (uses _TinyTcpServer fixture); False on connection refused; False on timeout (uses 192.0.2.1 RFC 5737 documentation address); False on DNS failure (invalid.invalid.invalid hostname). _bridge_script_path returns absolute path when script exists; bare filename when missing. _default_spec uses bridge mode when env unset + probe True; legacy mode when env set (probe NOT called \u2014 side_effect=AssertionError verifies); legacy mode when env unset + probe False; bridge mode when env empty string.
-  * tests/test_subprocess_plugins.py extended with 2 failure-mode tests: test_vanish_after_ready_triggers_restart_then_failure + test_emit_partial_json_die_counts_parse_error_then_fails. Both use restart_backoff=(0.05,) for 1 restart; assert ready event seen, restarts >= 1, final state = "failed", failed decoder_state event surfaced. The partial-JSON test additionally asserts parse_errors >= 1.
-- Caught and fixed mid-implementation bugs:
-  * Initial _bridge_script_path used parents[3] (off-by-one \u2014 should be parents[4] for the repo root). Test failure exposed it: returned bare "sbs1_to_ndjson.py" instead of the absolute path. Fixed.
-  * Initial ruff SIM102 violation in _default_spec (nested if not os.environ.get + if _probe_local_sbs1). Restructured as flat intermediate variables (bin_unset + sbs1_reachable). Clean.
-  * Initial ruff I001 (unsorted imports) in tests/test_dump1090_plugin.py. Auto-fixed via ruff --fix.
+- Read AI-HANDOFF.md \u00a75.7 for the "Federation polish follow-up" item: "decoder events from upstream receivers should reach the client's viz. The HD audio half shipped in slice-14."
+- Inspected existing federation protocol surface in sources/openwebrx_remote.py: wire types 0x01 FFT, 0x02 audio, 0x03 secondary FFT (slice-22), 0x04 HD audio (slice-14). The DisplayStreamSource protocol in sources/base.py declares the yieldable frame types; ReceiverSession._run_display in sessions/receiver_session.py dispatches them by isinstance() check and repacks into the wire formats broadcast to WS subscribers.
+- Inspected slice-22's pattern as the template for slice-32:
+  * sources/base.py: RemoteSecondaryFftFrame dataclass with the channel-scope bins + center_freq + sample_rate.
+  * sources/openwebrx_remote.py: _TYPE_SECONDARY_FFT = 0x03 + decode branch in _handle_binary that yields a RemoteSecondaryFftFrame.
+  * sessions/receiver_session.py: _run_display dispatch branch that calls _pack_secondary_fft_frame and broadcasts.
+  * tests/test_openwebrx_remote_driver.py: FakeOpenWebRxServer.send_secondary_fft option + 0x03 frame emission in the pump loop + _collect helper extended to optionally collect RemoteSecondaryFftFrame + 3 tests (decode, absent-when-not-configured, session-forwarding).
+- Designed slice-32 mirror:
+  * New wire type 0x05 \u2014 _TYPE_DECODER_EVENT.
+  * Wire format: [1-byte type=0x05][2-byte decoder_name_len LE][N-byte decoder_name UTF-8][4-byte event_json_len LE][M-byte event_json UTF-8]. The 2-byte / 4-byte length prefixes cap name at 65535 bytes + JSON payload at 4 GiB (more than enough for any decoder event).
+  * New dataclass RemoteDecoderEvent in sources/base.py: decoder_name: str + event: dict[str, Any].
+  * Decode branch in _handle_binary that parses the wire format defensively (too-short, truncated, JSON-parse-failed, not-a-dict all return None with a debug log).
+  * ReceiverSession._run_display dispatch branch that broadcasts a JSON envelope matching the local decoder event shape (type/decoder/receiverId/event) PLUS a new "remote": true field so the frontend can optionally render a "remote" badge.
+- Updated DisplayStreamSource protocol type annotation in sources/base.py to include RemoteDecoderEvent in the AsyncGenerator yield type.
+- Updated display_stream + _pump return type annotations in sources/openwebrx_remote.py to match.
+- Extended FakeOpenWebRxServer with 3 new fields: send_decoder_event, decoder_name, decoder_event_kind. When send_decoder_event=True, the pump loop emits 0x05 frames with a canned FT8-style payload (kind="digi_message", callsign="OH8ABC", grid="JO30", raw="CQ OH8ABC JO30", db=-10, frequency=3570000+frame_idx).
+- Extended _collect helper with want_decoder=0 parameter + a 4th return list (decoder_frames). Updated 4 existing _collect callers to unpack 4 elements (3 used _ for the new 4th; 2 used bare `await _collect(...)` which is unchanged).
+- Wrote 3 new tests in tests/test_openwebrx_remote_driver.py:
+  * test_decoder_event_frames_decode_with_remote_payload: FakeOpenWebRxServer(send_decoder_event=True) + _collect(want_decoder=1) \u2192 RemoteDecoderEvent with decoder_name="ft8" + event.kind="digi_message" + event.callsign="OH8ABC" + event.grid="JO30" + event.raw="CQ OH8ABC JO30".
+  * test_decoder_event_frames_absent_when_not_configured: send_decoder_event=False \u2192 decoder_frames == [].
+  * test_decoder_event_session_forwards_as_json_envelope: end-to-end through ReceiverSession \u2192 broadcast JSON envelope with type="decoder", decoder="ft8", receiverId="rx-decoder-test", remote=true, event.{kind,callsign,grid} matching the canned payload.
 - All quality gates verified GREEN on HEAD before push:
   * mypy openwebrx_plus (CI invocation): Success, no issues found in 60 source files.
   * ruff check .: All checks passed!
-  * server pytest: 525 passed, 1 skipped (was 504+1; +21 new tests: 8 fork detection + 9 dump1090_plugin + 2 ready event field assertion + 2 failure modes).
-  * web vitest: 178/178 pass across 14 files (unchanged; no web changes).
+  * server pytest: 528 passed, 1 skipped (was 525+1; +3 new slice-32 tests).
+  * web tsc --noEmit: clean (no output).
+  * web vitest: 178/178 pass across 14 test files (unchanged; no web changes).
+- AI-HANDOFF.md updates:
+  * \u00a74 verified-status table: server tests 525 \u2192 528; CI run row marked as slice-31 \u00d7 pending slice-32 CI run.
+  * \u00a74 slice history table: prepended row for slice-32.
+  * \u00a75.7 federation polish follow-up sub-bullet: marked \u2705 SHIPPED (slice-32) + added the slice-32 detail block at the end of \u00a75.7.
+  * \u00a74 footer "31 entries" \u2192 "32 entries".
 
 Stage Summary:
-- Slice-31 closes AI-HANDOFF.md \u00a75.6: dump1090 fixture improvements ship. (1) Fork auto-detect via --version probe + OPENWEBRX_PLUS_DUMP1090_FORK override; (2) auto-discovery of running SBS1 server via TCP probe of 127.0.0.1:30003; (3) two new fake_dump1090 failure modes for the runner's vanish/partial-JSON recovery paths.
-- Operator UX improvement: a stock dump1090-fa/mutability/readsb service running on 127.0.0.1:30003 now "just works" with OpenWebRX+ \u2014 no OPENWEBRX_PLUS_DUMP1090_BIN env var required. The plugin probes 30003 at startup and if reachable, default to the SBS1 bridge in --no-spawn mode against it.
-- The fork field in the ready event gives operators diagnostic visibility: they can see at attach time whether the bridge identified their binary as dump1090-fa / mutability / readsb / unknown.
-- The two new failure modes give the test suite coverage of the runner's "decoder vanished after ready" and "decoder emitted broken JSON" recovery paths \u2014 previously only the crash-restart path was covered.
-- All local gates verified green on HEAD before push: mypy 60 files clean / ruff clean / server 525+1 / web 178.
-- AI-HANDOFF.md \u00a75.6 will be marked RESOLVED in the next doc-refresh commit.
+- Slice-32 closes the AI-HANDOFF.md \u00a75.7 "Federation polish follow-up" sub-bullet: secondary-demod forwarding for openwebrx_remote. Decoder events (FT8 messages, ADS-B frames, AIS sentences, CW characters) emitted by upstream OpenWebRX+ peers now reach downstream clients' viz panels without the client needing to re-run the demod locally.
+- Operator UX improvement: an operator chaining OpenWebRX+ peers (e.g. a remote SDR at a friend's QTH feeding their local OpenWebRX+ instance) now sees decoded FT8 messages / aircraft tracks in their own UI, sourced from the upstream receiver. Legacy OpenWebRX / KiwiSDR / SpyServer peers never send 0x05 \u2014 the decode branch is a graceful no-op for them.
+- The "remote: true" field in the JSON envelope tags these events for the frontend; a follow-up frontend slice can optionally render a "remote" badge on the digi-message row. (No frontend changes in this slice.)
+- All local gates verified green on HEAD before push: mypy 60 files clean / ruff clean / server 528+1 / web tsc clean / web vitest 178.
 """
 
 worklog = Path("/home/z/my-project/worklog.md")

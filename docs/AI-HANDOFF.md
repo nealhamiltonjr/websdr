@@ -151,18 +151,18 @@ regeneration — proven by checksum, see §7.2).
 ## 4. Where we are — verified status
 
 Every number below was re-verified at snapshot time (2026-08-28, post
-slice-31, origin/main `eefd5c5`):
+slice-32, origin/main `<pending slice-32 commit>`):
 
 | Gate | Result |
 |---|---|
-| Server tests: `scripts/run-server-tests.sh` | **525 passed, 1 skipped**, 84% coverage (~82 s) |
+| Server tests: `scripts/run-server-tests.sh` | **528 passed, 1 skipped**, 84% coverage (~87 s) |
 | `mypy openwebrx_plus` (CI invocation via pyproject.toml; 60 files) | **Success, no issues** — CI is green. |
 | `mypy --strict openwebrx_plus` (CLI override, NOT how CI invokes) | 2 errors in `sources/sdrplay.py` lines 193, 207 (`@ffi.callback(...)` untyped decorator) — **NOT a CI failure**. pyproject sets `disallow_untyped_decorators = false` (FastAPI/cffi have opaque stubs). Adding `# type: ignore[untyped-decorator]` was tried in slice-23 and reverted in slice-23b (commit `6800d05`) because under pyproject config the comment is "unused" → itself a strict error. See §5.1 below for the resolution. |
 | `ruff check .` | clean |
 | Web `vitest` | **178/178 pass** across 14 test files (~3 s) |
 | Web `tsc --noEmit` | clean |
 | `vite build` | clean (one chunk-size warning, not an error) |
-| GitHub Actions CI (run `33143249664` for `eefd5c5` = slice-31) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types |
+| GitHub Actions CI (run `33143249664` for `eefd5c5` = slice-31) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types. (Slice-32 CI run pending at write time.) |
 
 **What works end-to-end today, hardware-free:**
 
@@ -254,6 +254,7 @@ slice-31, origin/main `eefd5c5`):
 
 | Slice | Title | Sync commit |
 |---|---|---|
+| 32 | federation polish follow-up: secondary-demod forwarding (RemoteDecoderEvent wire type 0x05) | `<pending>` |
 | 31 | dump1090 fixture improvements: fork auto-detect + SBS1 auto-discovery + new failure modes | `eefd5c5` |
 | 30 | docs refresh: AI-HANDOFF.md + STATUS.md to actual state; PAT-strip push of slices 27/28/29 | `aa18de0` |
 | 29 | FT8 v2.1 — wire soft FSK demod → sum-product LDPC as primary decode path | `fd7c98c` |
@@ -283,7 +284,7 @@ slice-31, origin/main `eefd5c5`):
 | 6.4 | AIS decoder (in-process plugin) + vessel list viz | `198141f` |
 | 6.1-6.3 | LICENSE + linked readouts + popout crosshair sync | `d56c558` |
 
-Full detail in `worklog.md` (append-only, 31 entries since slice-1).
+Full detail in `worklog.md` (append-only, 32 entries since slice-1).
 
 ## 5. What's left — prioritized roadmap with implementation guidance
 
@@ -463,9 +464,10 @@ suite 525 passed + 1 skipped (was 504+1).
   DigiMessageListViz + DigiMessageEvent wire contract (slice-21) is the
   substrate — these are sibling plugins in the same `DIGI_MESSAGE_DECODERS`
   family.
-- **Federation polish follow-up**: secondary-demod forwarding for
-  `openwebrx_remote` (decoder events from upstream receivers should
-  reach the client's viz). The HD audio half shipped in slice-14.
+- **Federation polish follow-up**: ✅ SHIPPED (slice-32, see below).
+  Secondary-demod forwarding for `openwebrx_remote` (decoder events from
+  upstream receivers reach the client's viz) — closed by slice-32. The HD
+  audio half shipped earlier in slice-14.
 - **Propagation intelligence**: MUF/foF2 fetch + display in the
   frequency guide (NOAA SWPC API). Long-term.
 - **QSL logging**: optional integration with eqsl.cc / LoTW.
@@ -473,6 +475,33 @@ suite 525 passed + 1 skipped (was 504+1).
   (current UI assumes ≥1024 px).
 - **Deployment**: Dockerfile + docker-compose for one-command boot
   (current bootstrap is documented but manual — §7).
+
+**Slice-32 detail — secondary-demod forwarding (closed the §5.7
+federation polish follow-up sub-bullet):**
+
+New OpenWebRX+-specific federation wire type 0x05 carries decoder
+events from upstream OpenWebRX+ peers. The decode branch lives in
+`sources/openwebrx_remote.py::_handle_binary` next to the slice-22
+secondary-FFT decode branch. The wire format is:
+
+```
+[1-byte type=0x05][2-byte decoder_name_len LE][N-byte decoder_name UTF-8]
+[4-byte event_json_len LE][M-byte event_json UTF-8]
+```
+
+New dataclass `RemoteDecoderEvent` in `sources/base.py` carries the
+decoded `decoder_name` + `event` dict; the ReceiverSession's
+`_run_display` loop forwards it via the same JSON envelope shape local
+decoders use, with an extra `remote: true` field so the frontend can
+optionally render a "remote" badge on the digi-message row. Legacy
+OpenWebRX / KiwiSDR / SpyServer peers never send 0x05 — the decode
+branch is a graceful no-op for them.
+
+Tests: 3 new in `tests/test_openwebrx_remote_driver.py` — decode test
+(canned FT8 payload round-trips through the wire format), absent-when-
+not-configured test, and session-forwarding test that asserts the JSON
+envelope shape on the WS broadcast. Server suite 528 passed + 1 skipped
+(was 525+1; +3 from slice-32).
 
 ### The working protocol (how to ship a slice)
 

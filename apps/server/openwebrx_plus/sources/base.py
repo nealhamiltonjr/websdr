@@ -234,6 +234,35 @@ class RemoteAudioFrame:
     sample_rate: int  # Hz
 
 
+@dataclass(frozen=True)
+class RemoteDecoderEvent:
+    """One decoder event from a remote OpenWebRX+ peer (slice-32 —
+    federation polish follow-up).
+
+    The OpenWebRX federation protocol carries an optional decoder-event
+    stream (Type 0x05 frames) — when an upstream OpenWebRX+ receiver
+    decodes an FT8 message / ADS-B frame / AIS sentence / CW character
+    on its tuned channel, that event is forwarded to downstream peers
+    so the client's digi-message / aircraft / vessel viz panels render
+    it without needing to re-run the demodulator locally.
+
+    Non-OpenWebRX+ peers (legacy OpenWebRX, KiwiSDR, SpyServer) never
+    send 0x05 frames — the decode branch is a graceful no-op for them.
+    The wire format is OpenWebRX+-specific (see sources/openwebrx_remote.py
+    ``_TYPE_DECODER_EVENT = 0x05``).
+
+    ``event`` is the decoded JSON dict (matching the local decoder
+    event schema: ``{"kind": "frame" | "aircraft" | "decoder_state"
+    | "digi_message", ...}``). ``decoder_name`` identifies which
+    decoder produced it (e.g. ``"ft8"``, ``"adsb"``, ``"ais"``,
+    ``"cw"``) so the ReceiverSession can route it to the correct
+    downstream viz panel.
+    """
+
+    decoder_name: str  # which decoder produced the event
+    event: dict[str, Any]  # the decoded JSON payload (kind, ts, icao, etc.)
+
+
 @runtime_checkable
 class DisplayStreamSource(Protocol):
     """A source that yields *display frames* instead of raw IQ (ADR-006).
@@ -255,9 +284,14 @@ class DisplayStreamSource(Protocol):
     def display_stream(
         self,
     ) -> AsyncGenerator[
-        RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame, None
+        RemoteFftFrame
+        | RemoteSecondaryFftFrame
+        | RemoteAudioFrame
+        | RemoteDecoderEvent,
+        None,
     ]:
-        """Yield remote FFT/secondary-FFT/audio frames until the connection ends.
+        """Yield remote FFT/secondary-FFT/audio/decoder-event frames until
+        the connection ends.
 
         Raises RuntimeError on connect failure or remote refusal
         (``backoff``) — display sources never retry on their own.

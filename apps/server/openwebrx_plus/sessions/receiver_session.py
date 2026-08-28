@@ -49,6 +49,7 @@ from ..plugins.base import (
 from ..plugins.registry import decoder_registry
 from ..sources.base import (
     RemoteAudioFrame,
+    RemoteDecoderEvent,
     RemoteFftFrame,
     RemoteSecondaryFftFrame,
     Source,
@@ -734,6 +735,29 @@ class ReceiverSession:
                     await self._broadcast(
                         self._pack_audio_frame(frame.pcm, int(frame.sample_rate))
                     )
+                elif isinstance(frame, RemoteDecoderEvent):
+                    # Slice-32: forward the remote decoder event to all
+                    # local WS subscribers in the same JSON envelope
+                    # shape that local decoders use, so the frontend
+                    # viz panels (DigiMessageListViz, AircraftListViz,
+                    # VesselListViz) treat remote events identically to
+                    # local ones. The "decoder" field carries the
+                    # remote's decoder_name (ft8 / adsb / ais / cw / ...)
+                    # so the demux in the frontend's WS handler routes
+                    # it to the correct viz panel.
+                    payload = json.dumps(
+                        {
+                            "type": "decoder",
+                            "decoder": frame.decoder_name,
+                            "receiverId": self.receiver_id,
+                            "event": frame.event,
+                            # Tag the event as remote-sourced so the
+                            # frontend can optionally render an indicator
+                            # ("remote" badge on the digi-message row).
+                            "remote": True,
+                        }
+                    )
+                    await self._broadcast(payload)
         except Exception as exc:
             log.exception(
                 "remote display stream error",

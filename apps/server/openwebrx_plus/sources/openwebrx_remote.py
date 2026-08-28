@@ -76,6 +76,7 @@ import websockets
 from ._adpcm import ImaAdpcmCodec, decode_fft_adpcm
 from .base import (
     RemoteAudioFrame,
+    RemoteDecoderEvent,
     RemoteFftFrame,
     RemoteSecondaryFftFrame,
     SourceInfo,
@@ -91,6 +92,19 @@ _TYPE_FFT = 0x01
 _TYPE_AUDIO = 0x02
 _TYPE_SECONDARY_FFT = 0x03
 _TYPE_HD_AUDIO = 0x04
+# Slice-32: OpenWebRX+-specific extension to the federation protocol.
+# Decoder events (FT8 messages, ADS-B frames, AIS sentences, CW
+# characters, etc.) from the upstream receiver's tuned channel. Legacy
+# OpenWebRX / KiwiSDR / SpyServer peers never send 0x05 — the decode
+# branch is a graceful no-op for them. Wire format:
+#   [1-byte type=0x05][2-byte decoder_name_len LE]
+#   [N-byte decoder_name UTF-8][4-byte event_json_len LE]
+#   [M-byte event_json UTF-8]
+# The 2-byte decoder_name_len caps the name at 65535 bytes (more than
+# enough); the 4-byte event_json_len caps the JSON payload at 4 GiB
+# (more than enough for any single decoder event). Both lengths are
+# little-endian unsigned ints.
+_TYPE_DECODER_EVENT = 0x05
 _DEFAULT_FFT_COMPRESSION = "adpcm"  # server-side defaults; config overrides
 _DEFAULT_AUDIO_COMPRESSION = "adpcm"
 _DEFAULT_OUTPUT_RATE = 12_000  # OpenWebRX+ server default
@@ -329,7 +343,10 @@ class RemoteDisplaySource:
     async def display_stream(
         self,
     ) -> AsyncGenerator[
-        RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame,
+        RemoteFftFrame
+        | RemoteSecondaryFftFrame
+        | RemoteAudioFrame
+        | RemoteDecoderEvent,
         None,
     ]:
         """Connect to the receiver and yield FFT/secondary-FFT/audio frames forever.
@@ -383,7 +400,10 @@ class RemoteDisplaySource:
     async def _pump(
         self, connection: Any
     ) -> AsyncGenerator[
-        RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame,
+        RemoteFftFrame
+        | RemoteSecondaryFftFrame
+        | RemoteAudioFrame
+        | RemoteDecoderEvent,
         None,
     ]:
         """Message loop: handshake reply → rates → dsp start → frames.
@@ -653,7 +673,7 @@ class RemoteDisplaySource:
 
     def _handle_binary(
         self, data: bytes
-    ) -> RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame | None:
+    ) -> RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame | RemoteDecoderEvent | None:
         """Demux + decode one binary frame (tag byte + payload)."""
         if not data:
             return None
@@ -759,6 +779,63 @@ class RemoteDisplaySource:
             if len(pcm) == 0:
                 return None
             return RemoteAudioFrame(pcm=pcm, sample_rate=self.hd_output_rate)
+
+        if tag == _TYPE_DECODER_EVENT:
+            # Slice-32: decoder event (OpenWebRX+-specific extension to the
+            # federation protocol). Upstream OpenWebRX+ peers forward their
+            # in-process decoder events (FT8 messages, ADS-B frames, AIS
+            # sentences, CW characters) so downstream clients can render them
+            # in the corresponding viz panel without re-running the demod
+            # locally. Legacy OpenWebRX / KiwiSDR / SpyServer never send
+            # 0x05 — the decode branch is a graceful no-op for them.
+            #
+            # Wire format (little-endian):
+            #   [2-byte decoder_name_len][N-byte decoder_name UTF-8]
+            #   [4-byte event_json_len][M-byte event_json UTF-8]
+            if len(payload) < 2:
+                log.debug("decoder_event frame too short for name_len", length=len(payload))
+                return None
+            name_len = int.from_bytes(payload[:2], byteorder="little", signed=False)
+            if len(payload) < 2 + name_len + 4:
+                log.debug(
+                    "decoder_event frame truncated",
+                    name_len=name_len,
+                    payload_len=len(payload),
+                )
+                return None
+            decoder_name = payload[2 : 2 + name_len].decode("utf-8", errors="replace")
+            event_len_offset = 2 + name_len
+            event_len = int.from_bytes(
+                payload[event_len_offset : event_len_offset + 4],
+                byteorder="little",
+                signed=False,
+            )
+            event_json_bytes = payload[event_len_offset + 4 :]
+            if len(event_json_bytes) < event_len:
+                log.debug(
+                    "decoder_event JSON truncated",
+                    expected=event_len,
+                    actual=len(event_json_bytes),
+                )
+                return None
+            event_json_str = event_json_bytes[:event_len].decode("utf-8", errors="replace")
+            try:
+                event = json.loads(event_json_str)
+            except json.JSONDecodeError as exc:
+                log.debug(
+                    "decoder_event JSON parse failed",
+                    decoder=decoder_name,
+                    err=str(exc),
+                )
+                return None
+            if not isinstance(event, dict):
+                log.debug(
+                    "decoder_event JSON not an object",
+                    decoder=decoder_name,
+                    type=type(event).__name__,
+                )
+                return None
+            return RemoteDecoderEvent(decoder_name=decoder_name, event=event)
 
         log.debug("unknown binary frame tag", tag=tag)
         return None

@@ -54,6 +54,7 @@ from openwebrx_plus.sources._adpcm import (
 )
 from openwebrx_plus.sources.base import (
     RemoteAudioFrame,
+    RemoteDecoderEvent,
     RemoteFftFrame,
     RemoteSecondaryFftFrame,
 )
@@ -93,6 +94,14 @@ class FakeOpenWebRxServer:
         secondary_samp_rate: int = 8_000,
         secondary_center_freq: int = 3_570_000,
         secondary_offset_freq: int = 0,
+        # Slice-32: enable decoder event (0x05) frame emission. When True,
+        # the server sends 0x05 binary frames in the pump loop, each
+        # carrying one canned FT8-style decoder event. The wire format
+        # mirrors the OpenWebRX+-specific extension to the federation
+        # protocol (NOT legacy OpenWebRX, which never sends 0x05).
+        send_decoder_event: bool = False,
+        decoder_name: str = "ft8",
+        decoder_event_kind: str = "digi_message",
     ) -> None:
         self.fft_size = fft_size
         self.samp_rate = samp_rate
@@ -108,6 +117,10 @@ class FakeOpenWebRxServer:
         self.secondary_samp_rate = secondary_samp_rate
         self.secondary_center_freq = secondary_center_freq
         self.secondary_offset_freq = secondary_offset_freq
+        # Slice-32 fields.
+        self.send_decoder_event = send_decoder_event
+        self.decoder_name = decoder_name
+        self.decoder_event_kind = decoder_event_kind
 
         self.handshakes: list[str] = []
         self.client_messages: list[dict] = []
@@ -335,6 +348,35 @@ class FakeOpenWebRxServer:
                     ) % self.secondary_fft_size
                     sec_bins[tone_bin] = self.peak_db
                     await ws.send(b"\x03" + secondary_encoder.encode(sec_bins))
+                # Slice-32: decoder event frame (tag 0x05). Carries one
+                # canned decoder event in the OpenWebRX+-specific wire
+                # format: [2-byte name_len LE][N-byte name][4-byte
+                # event_json_len LE][M-byte event_json]. The canned
+                # event mimics a real FT8 message decode (kind, ts,
+                # icao, raw) so the ReceiverSession forwarding test
+                # asserts against a realistic shape.
+                if self.send_decoder_event:
+                    name_bytes = self.decoder_name.encode("utf-8")
+                    event_payload = {
+                        "kind": self.decoder_event_kind,
+                        "ts": frame_idx * 0.05,
+                        "decoder": self.decoder_name,
+                        "raw": "CQ OH8ABC JO30",
+                        "callsign": "OH8ABC",
+                        "grid": "JO30",
+                        "db": -10,
+                        "frequency": 3570000 + frame_idx,
+                    }
+                    event_bytes = json.dumps(event_payload).encode("utf-8")
+                    name_len_bytes = len(name_bytes).to_bytes(2, byteorder="little")
+                    event_len_bytes = len(event_bytes).to_bytes(4, byteorder="little")
+                    await ws.send(
+                        b"\x05"
+                        + name_len_bytes
+                        + name_bytes
+                        + event_len_bytes
+                        + event_bytes
+                    )
                 frame_idx += 1
                 await asyncio.sleep(self.frame_interval)
         except websockets.exceptions.ConnectionClosed:
@@ -352,16 +394,20 @@ async def _collect(
     want_fft: int = 1,
     want_audio: int = 1,
     want_secondary: int = 0,
+    want_decoder: int = 0,
     budget_s: float = 6.0,
-) -> tuple[list, list, list]:
+) -> tuple[list, list, list, list]:
     """Consume display_stream() until enough frames arrive (or budget spent).
 
     Slice-22 extension: optionally collects RemoteSecondaryFftFrame
     separately (the third return list).
+    Slice-32 extension: optionally collects RemoteDecoderEvent
+    separately (the fourth return list).
     """
     fft_frames: list = []
     audio_frames: list = []
     secondary_frames: list = []
+    decoder_frames: list = []
     gen = source.display_stream()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget_s
@@ -370,6 +416,7 @@ async def _collect(
             len(fft_frames) < want_fft
             or len(audio_frames) < want_audio
             or len(secondary_frames) < want_secondary
+            or len(decoder_frames) < want_decoder
         ):
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -384,9 +431,11 @@ async def _collect(
                 secondary_frames.append(frame)
             elif isinstance(frame, RemoteFftFrame):
                 fft_frames.append(frame)
+            elif isinstance(frame, RemoteDecoderEvent):
+                decoder_frames.append(frame)
     finally:
         await gen.aclose()
-    return fft_frames, audio_frames, secondary_frames
+    return fft_frames, audio_frames, secondary_frames, decoder_frames
 
 
 async def _wait_for(predicate, budget_s: float = 3.0) -> None:
@@ -559,7 +608,7 @@ async def test_handshake_config_and_initial_tuning(fake_rx):
     source = RemoteDisplaySource(
         host="127.0.0.1", port=fake_rx.port, freq=3_570_000, mod="lsb", squelch=-150
     )
-    fft, audio, _ = await _collect(source, want_fft=2, want_audio=2)
+    fft, audio, _, _ = await _collect(source, want_fft=2, want_audio=2)
     assert len(fft) >= 2 and len(audio) >= 2
 
     # server saw an honest handshake + rate request + dsp start
@@ -596,7 +645,7 @@ async def test_handshake_config_and_initial_tuning(fake_rx):
 
 async def test_frames_decode_correctly(fake_rx):
     source = RemoteDisplaySource(host="127.0.0.1", port=fake_rx.port)
-    fft, audio, _ = await _collect(source, want_fft=3, want_audio=3)
+    fft, audio, _, _ = await _collect(source, want_fft=3, want_audio=3)
 
     frame = fft[0]
     assert frame.bins.dtype == np.float32
@@ -735,7 +784,7 @@ async def test_secondary_fft_frames_decode_with_config():
         source = RemoteDisplaySource(
             url=f"http://127.0.0.1:{server.port}/#freq=3570000,mod=lsb,sql=-150"
         )
-        fft, _, secondary = await _collect(
+        fft, _, secondary, _ = await _collect(
             source, want_fft=1, want_audio=0, want_secondary=1, budget_s=8.0
         )
         assert len(fft) >= 1, "primary FFT frames should still arrive"
@@ -774,7 +823,7 @@ async def test_secondary_fft_frames_absent_when_not_configured():
         source = RemoteDisplaySource(
             url=f"http://127.0.0.1:{server.port}/#freq=3570000,mod=lsb,sql=-150"
         )
-        fft, _, secondary = await _collect(
+        fft, _, secondary, _ = await _collect(
             source, want_fft=1, want_audio=0, want_secondary=0, budget_s=3.0
         )
         assert len(fft) >= 1
@@ -838,6 +887,120 @@ async def test_secondary_fft_session_forwards_as_wrsf_wire_frame(fake_rx):
         assert n_bins == fake_rx.secondary_fft_size
         assert int(center) == fake_rx.secondary_center_freq
         assert int(samp_rate) == fake_rx.secondary_samp_rate
+    finally:
+        await session.stop()
+
+
+# ---------------------------------------------------------------------------
+# Slice-32: decoder event (Type 0x05) federation forwarding
+# ---------------------------------------------------------------------------
+
+
+async def test_decoder_event_frames_decode_with_remote_payload():
+    """Slice-22-style test for slice-32: when the remote emits 0x05 binary
+    frames, the federation client must decode them as RemoteDecoderEvent
+    with the right decoder_name + event JSON payload."""
+    server = FakeOpenWebRxServer(
+        send_decoder_event=True,
+        decoder_name="ft8",
+        decoder_event_kind="digi_message",
+    )
+    await server.start()
+    try:
+        source = RemoteDisplaySource(
+            url=f"http://127.0.0.1:{server.port}/#freq=3570000,mod=lsb,sql=-150"
+        )
+        fft, _, _, decoder = await _collect(
+            source, want_fft=1, want_audio=0, want_secondary=0, want_decoder=1, budget_s=8.0
+        )
+        assert len(fft) >= 1, "primary FFT frames should still arrive"
+        assert len(decoder) >= 1, "at least one decoder event frame expected"
+        # Validate the decoded event carries the canned FT8 payload.
+        ev = decoder[0]
+        assert isinstance(ev, RemoteDecoderEvent)
+        assert ev.decoder_name == "ft8"
+        assert ev.event["kind"] == "digi_message"
+        assert ev.event["callsign"] == "OH8ABC"
+        assert ev.event["grid"] == "JO30"
+        assert ev.event["raw"] == "CQ OH8ABC JO30"
+    finally:
+        await server.stop()
+
+
+async def test_decoder_event_frames_absent_when_not_configured():
+    """Without send_decoder_event=True, the server never sends 0x05 frames
+    and the federation client never yields a RemoteDecoderEvent."""
+    server = FakeOpenWebRxServer(send_decoder_event=False)
+    await server.start()
+    try:
+        source = RemoteDisplaySource(
+            url=f"http://127.0.0.1:{server.port}/#freq=3570000,mod=lsb,sql=-150"
+        )
+        fft, _, _, decoder = await _collect(
+            source, want_fft=1, want_audio=0, want_secondary=0, want_decoder=0, budget_s=3.0
+        )
+        assert len(fft) >= 1
+        assert decoder == []
+    finally:
+        await server.stop()
+
+
+async def test_decoder_event_session_forwards_as_json_envelope(fake_rx):
+    """Slice-32 end-to-end: a decoder event from the federation client
+    flows through ReceiverSession and emerges on the WS as a JSON
+    envelope matching the local decoder event shape (so frontend viz
+    panels treat remote events identically to local ones)."""
+    fake_rx.send_decoder_event = True
+    fake_rx.decoder_name = "ft8"
+    fake_rx.decoder_event_kind = "digi_message"
+
+    source = RemoteDisplaySource(
+        url=f"http://127.0.0.1:{fake_rx.port}/#freq=3570000,mod=lsb,sql=-150"
+    )
+    session = ReceiverSession(
+        receiver_id="rx-decoder-test",
+        source=source,  # type: ignore[arg-type]
+        center_freq=3_568_000,
+        sample_rate=240_000,
+        mode="LSB",
+    )
+    try:
+        await session.start()
+        # Capture broadcast frames.
+        captured: list[bytes | str] = []
+        original_broadcast = session._broadcast
+        async def capture(frame_payload: bytes | str) -> None:
+            captured.append(frame_payload)
+        session._broadcast = capture  # type: ignore[method-assign]
+        # Wait for at least one JSON decoder envelope to be broadcast.
+        deadline = asyncio.get_running_loop().time() + 6.0
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+            if any(
+                isinstance(p, str) and '"decoder"' in p and '"ft8"' in p
+                for p in captured
+            ):
+                break
+        session._broadcast = original_broadcast  # type: ignore[method-assign]
+        # Find the first decoder envelope.
+        decoder_payloads = [
+            p for p in captured
+            if isinstance(p, str) and '"decoder"' in p and '"ft8"' in p
+        ]
+        assert decoder_payloads, (
+            "expected at least one decoder JSON envelope on the WS broadcast"
+        )
+        import json as _json
+        envelope = _json.loads(decoder_payloads[0])
+        assert envelope["type"] == "decoder"
+        assert envelope["decoder"] == "ft8"
+        assert envelope["receiverId"] == "rx-decoder-test"
+        assert envelope["remote"] is True  # tagged for frontend
+        # Event payload carries the canned FT8 message fields.
+        ev = envelope["event"]
+        assert ev["kind"] == "digi_message"
+        assert ev["callsign"] == "OH8ABC"
+        assert ev["grid"] == "JO30"
     finally:
         await session.stop()
 
