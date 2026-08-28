@@ -1408,3 +1408,23 @@ Stage Summary:
 - Frontend viz count: 10 → 11 (added ImageViz).
 - The DigiMessageListViz now renders FT8 + WSPR + JT65 messages; ImageViz renders SSTV images; TextStreamViz renders CW/RTTY/PSK31/Olivia text. All 13 decoders have frontend type coverage.
 - All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
+
+---
+Task ID: 49-51
+Agent: super-z (main agent)
+Task: Three-slice autonomous sprint — PacketListViz, JT9 decoder, FAX decoder.
+
+Work Log:
+- Slice 49: PacketListViz frontend component — packetListModel.ts (pure-logic model with applyDecoderEvent for packet/crc_error events, ring buffer at MAX_PACKETS=100, separate decoded/error counters, formatTime, formatAge, formatFrameType, formatDigipeaters), PacketListViz.tsx (scrollable table with source→destination, digipeater path, frame type, info text, CRC error rows in red). 19 new web tests. Web tests: 236 → 255.
+- Slice 50: JT9 decoder — jt9_demod.py (9-tone MFSK Goertzel at 1.4648 Hz spacing, 85-symbol transmissions ~1 min), jt9_protocol.py (4-bit symbol↔bit conversion, payload unpack reusing JT65's 72-bit layout), jt9.py (plugin emitting message/progress events). 15 new tests. Server tests: 669 → 684.
+- Slice 51: FAX decoder — fax_demod.py (FM-based weather facsimile demodulator with 300 Hz start tone + 450 Hz stop tone detection, frequency-to-pixel mapping 1500 Hz=black to 2300 Hz=white, IOC 576 + 120 LPM defaults), fax.py (plugin emitting image/scanline/start/stop events with base64 grayscale data). 14 new tests. Server tests: 684 → 698.
+- Each slice: ran full quality gates (server tests, ruff, mypy strict, web tests, tsc, eslint, vite build), ran E2E smoke, committed, pushed via PAT-strip pattern, verified sync.
+- All slices pushed to origin/main: 5a47cc1 (slice-49) → 3462259 (slice-50) → 40ad051 (slice-51).
+
+Stage Summary:
+- Three slices shipped: PacketListViz (slice-49), JT9 decoder (slice-50), FAX decoder (slice-51).
+- Server test count: 669 → 698 (+29 new tests).
+- Web test count: 236 → 255 (+19 new tests).
+- Decoder count: 13 → 15 (added JT9 + FAX).
+- Frontend viz count: 11 → 12 (added PacketListViz).
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
