@@ -1327,3 +1327,23 @@ Stage Summary:
 - 10 new tests, all green. Total server test count: 528 → 538 (+1 skipped unchanged). All static gates clean. Live E2E smoke confirms no regressions.
 - The SDRangel federation client is now feature-complete (spectrum + audio + mode switching). The only remaining SDRangel work is first-live-receiver wire-literal verification (the in-repo FakeSDRangelServer codifies the expected protocol; if a real SDRangel differs, adjust the _* constants in sources/sdrangel.py).
 - Ready to commit + push as slice-35.
+
+---
+Task ID: 36-39
+Agent: super-z (main agent)
+Task: Four-slice autonomous development sprint — Rust AIDenoiser wiring, docs refresh, RTTY decoder, PSK31 decoder.
+
+Work Log:
+- Slice 36: Installed rustup + cargo (minimal profile, no sudo). Built packages/ai-rust cdylib via cargo build --release (libowrx_ai.so, 423 KB). Wired RustAIDenoiser into ReceiverSession.set_dsp_mode() — prefers the Rust cdylib when available, falls back to numpy AIDenoiser. 4 new tests in test_ai_denoise_rust.py (feed returns int16, multi-frame non-zero output, silence near-zero, reset clears state). Server tests: 538 → 542.
+- Slice 37: Refreshed stale docs — AGENTS.md test counts (229→542, 95→178), layout cheat sheet (11→12 sources, added ai-rust slice-36 mention, 6→7 ADRs), commit template counts. ADR-002 status text updated from "ai/cascade gated" to "all four modes LIVE". Docs-only, no code changes.
+- Slice 38: RTTY decoder — rtty_demod.py (dual-Goertzel FSK at 2125/2295 Hz, 45.45 baud, frame state machine), rtty_protocol.py (ITA2/Baudot 5-bit decoder with letter/figure shift), rtty.py (plugin). 21 new tests covering ITA2 decoding, Goertzel detection, FSK audio synthesis + round-trip, plugin pipeline. Server tests: 542 → 563.
+- Slice 39: PSK31 decoder — psk31_demod.py (coherent BPSK demod, complex LO mix-down, moving-average LPF, phase-reversal detection, 31.25 baud clock recovery), psk31_protocol.py (Varicode decoder with 47-character table, all codes valid — no '00' within, ends with 1), psk31.py (plugin). 18 new tests. Server tests: 563 → 581.
+- Each slice: ran full quality gates (server tests, ruff, mypy strict, web tests, tsc, eslint, vite build), ran E2E smoke (boot real server, hit REST endpoints, WS FFT+audio+metadata frames, ADS-B decoder events), committed with conventional message, pushed via PAT-strip inline-URL pattern, reset remote URL to clean HTTPS, verified origin/main matches local HEAD.
+- All slices pushed to origin/main: 4743c09 (slice-35) → 24fab4d (slice-36) → 5d951a7 (slice-37) → d3a2a4d (slice-38) → cf5a72e (slice-39).
+
+Stage Summary:
+- Four slices shipped in one autonomous sprint: Rust AIDenoiser wiring (slice-36), docs refresh (slice-37), RTTY decoder (slice-38), PSK31 decoder (slice-39).
+- Server test count: 538 → 581 (+43 new tests across 4 slices).
+- Decoder count: 6 → 8 (added RTTY + PSK31, both audio-band in-process Python).
+- The AI cascade is now natively accelerated when the Rust cdylib is built (slice-36 closes the gap between packages/ai-rust and apps/server).
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
