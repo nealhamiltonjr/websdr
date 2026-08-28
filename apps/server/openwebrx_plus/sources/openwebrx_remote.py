@@ -74,7 +74,12 @@ import structlog
 import websockets
 
 from ._adpcm import ImaAdpcmCodec, decode_fft_adpcm
-from .base import RemoteAudioFrame, RemoteFftFrame, SourceInfo
+from .base import (
+    RemoteAudioFrame,
+    RemoteFftFrame,
+    RemoteSecondaryFftFrame,
+    SourceInfo,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -265,6 +270,12 @@ class RemoteDisplaySource:
     _current_offset: int = field(default=0, init=False)
     _current_mod: str | None = field(default=None, init=False)
     _initial_params_sent: bool = field(default=False, init=False)
+    # Slice-22: secondary FFT config (from the remote's
+    # `secondary_config` JSON message). Decoded 0x03 frames use this
+    # for their center_freq / sample_rate.
+    _secondary_config: dict[str, object] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.url:
@@ -317,8 +328,11 @@ class RemoteDisplaySource:
 
     async def display_stream(
         self,
-    ) -> AsyncGenerator[RemoteFftFrame | RemoteAudioFrame, None]:
-        """Connect to the receiver and yield FFT/audio frames forever.
+    ) -> AsyncGenerator[
+        RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame,
+        None,
+    ]:
+        """Connect to the receiver and yield FFT/secondary-FFT/audio frames forever.
 
         Raises RuntimeError on connect failure or if the receiver refuses us
         (``backoff``) — no retry loop (ADR-006 etiquette). Ends cleanly when
@@ -368,7 +382,10 @@ class RemoteDisplaySource:
 
     async def _pump(
         self, connection: Any
-    ) -> AsyncGenerator[RemoteFftFrame | RemoteAudioFrame, None]:
+    ) -> AsyncGenerator[
+        RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame,
+        None,
+    ]:
         """Message loop: handshake reply → rates → dsp start → frames.
 
         Any binary frames that arrive during the handshake/initial-config
@@ -612,17 +629,31 @@ class RemoteDisplaySource:
             "bookmarks",
             "bands",
             "metadata",
-            "secondary_config",
             "secondary_demod",
             "chat_message",
             "temperature",
             "battery",
         ):
             log.debug("receiver message ignored", type=mtype)
+        elif mtype == "secondary_config":
+            # Slice-22: parse the secondary FFT config so we can decode
+            # the 0x03 frames with their proper center_freq / sample_rate.
+            # Stored on self._secondary_config; _handle_binary reads it
+            # when it sees a _TYPE_SECONDARY_FFT frame.
+            if isinstance(value, dict):
+                self._secondary_config = value
+                log.debug(
+                    "secondary FFT config",
+                    config=value,
+                )
+            else:
+                log.debug("secondary_config not a dict", type=type(value).__name__)
         else:
             log.debug("unknown receiver message", type=mtype)
 
-    def _handle_binary(self, data: bytes) -> RemoteFftFrame | RemoteAudioFrame | None:
+    def _handle_binary(
+        self, data: bytes
+    ) -> RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame | None:
         """Demux + decode one binary frame (tag byte + payload)."""
         if not data:
             return None
@@ -660,8 +691,59 @@ class RemoteDisplaySource:
             return RemoteAudioFrame(pcm=pcm, sample_rate=self.output_rate)
 
         if tag == _TYPE_SECONDARY_FFT:
-            log.debug("secondary FFT frame skipped (digimodes not wired yet)")
-            return None
+            # Slice-22: secondary FFT (the "channel scope" view — narrowband
+            # spectrum of the demod channel). Same compression codec as the
+            # primary FFT (per upstream OpenWebRX protocol); decoded bins
+            # are float32 dB, DC-centered.
+            if self._fft_compression == "none":
+                bins = np.frombuffer(payload, dtype="<f4").astype(np.float32)
+            else:
+                # Secondary FFT size may differ from primary; if the remote
+                # sent a secondary_config, use it. Else fall back to the
+                # primary fft_size (the upstream protocol uses the same
+                # ADPCM codec, just smaller frame sizes).
+                sec_size = self._secondary_config.get("secondary_fft_size")
+                prim_size = self.remote_config.get("fft_size")
+                hint = (
+                    int(sec_size)
+                    if isinstance(sec_size, (int, float))
+                    else (int(prim_size) if isinstance(prim_size, (int, float)) else None)
+                )
+                bins = decode_fft_adpcm(payload, hint)
+
+            # Secondary channel params from secondary_config. Default to
+            # zero / unknown when the remote hasn't sent the config yet —
+            # the frontend will see empty bins at 0 Hz.
+            sec_center = self._secondary_config.get("secondary_center_freq")
+            # If the remote doesn't carry secondary_center_freq, compute it:
+            #   dial_freq + secondary_offset_freq (typically 0 for demod-aligned).
+            if sec_center is None:
+                dial = self.remote_config.get("center_freq", 0)
+                offset = self._secondary_config.get("secondary_offset_freq", 0)
+                sec_center = (
+                    int(dial) + int(offset)
+                    if isinstance(dial, (int, float)) and isinstance(offset, (int, float))
+                    else 0
+                )
+            sec_rate = self._secondary_config.get("secondarysamp_rate")
+            levels = self._secondary_config.get("waterfall_levels") or self.remote_config.get("waterfall_levels")
+            min_db = (
+                float(levels[0])
+                if isinstance(levels, (list, tuple)) and len(levels) >= 1
+                else None
+            )
+            max_db = (
+                float(levels[1])
+                if isinstance(levels, (list, tuple)) and len(levels) >= 2
+                else None
+            )
+            return RemoteSecondaryFftFrame(
+                bins=bins,
+                center_freq=int(sec_center) if isinstance(sec_center, (int, float)) else 0,
+                sample_rate=int(sec_rate) if isinstance(sec_rate, (int, float)) else 0,
+                min_db=min_db,
+                max_db=max_db,
+            )
         if tag == _TYPE_HD_AUDIO:
             # Slice-14: HD audio (WFM music quality) — same ADPCM codec as the
             # standard audio stream, but at hd_output_rate (default 48 kHz).

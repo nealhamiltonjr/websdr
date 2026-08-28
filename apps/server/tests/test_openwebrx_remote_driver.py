@@ -52,7 +52,11 @@ from openwebrx_plus.sources._adpcm import (
     ImaAdpcmCodec,
     decode_fft_adpcm,
 )
-from openwebrx_plus.sources.base import RemoteAudioFrame, RemoteFftFrame
+from openwebrx_plus.sources.base import (
+    RemoteAudioFrame,
+    RemoteFftFrame,
+    RemoteSecondaryFftFrame,
+)
 
 # ---------------------------------------------------------------------------
 # The fake OpenWebRX(+) server
@@ -78,6 +82,17 @@ class FakeOpenWebRxServer:
         peak_db: float = -55.0,
         send_backoff: bool = False,
         frame_interval: float = 0.05,
+        # Slice-22: enable secondary FFT (0x03) frame emission. When True,
+        # the server sends a `secondary_config` JSON message in the config
+        # burst + 0x03 binary frames in the pump loop. The config carries
+        # secondary_fft_size / secondarysamp_rate / secondary_center_freq
+        # / secondary_offset_freq / waterfall_levels — same fields a real
+        # OpenWebRX instance emits when a secondary demod is attached.
+        send_secondary_fft: bool = False,
+        secondary_fft_size: int = 64,
+        secondary_samp_rate: int = 8_000,
+        secondary_center_freq: int = 3_570_000,
+        secondary_offset_freq: int = 0,
     ) -> None:
         self.fft_size = fft_size
         self.samp_rate = samp_rate
@@ -88,6 +103,11 @@ class FakeOpenWebRxServer:
         self.peak_db = peak_db
         self.send_backoff = send_backoff
         self.frame_interval = frame_interval
+        self.send_secondary_fft = send_secondary_fft
+        self.secondary_fft_size = secondary_fft_size
+        self.secondary_samp_rate = secondary_samp_rate
+        self.secondary_center_freq = secondary_center_freq
+        self.secondary_offset_freq = secondary_offset_freq
 
         self.handshakes: list[str] = []
         self.client_messages: list[dict] = []
@@ -220,6 +240,25 @@ class FakeOpenWebRxServer:
             json.dumps({"type": "profiles", "value": [{"id": "p1", "name": "80 m"}]})
         )
 
+        # Slice-22: when the server has a secondary FFT stream enabled,
+        # emit a `secondary_config` JSON message after the main config
+        # burst (mirrors owrx/connection.py ordering).
+        if self.send_secondary_fft:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "secondary_config",
+                        "value": {
+                            "secondary_fft_size": self.secondary_fft_size,
+                            "secondarysamp_rate": self.secondary_samp_rate,
+                            "secondary_center_freq": self.secondary_center_freq,
+                            "secondary_offset_freq": self.secondary_offset_freq,
+                            "waterfall_levels": [-90, -20],
+                        },
+                    }
+                )
+            )
+
         if self.send_backoff:
             await ws.send(json.dumps({"type": "backoff", "reason": "Too many clients"}))
             await ws.close()
@@ -258,6 +297,12 @@ class FakeOpenWebRxServer:
     async def _pump(self, ws: ServerConnection) -> None:
         await self.dsp_started.wait()
         fft_encoder = FftAdpcmEncoder(self.fft_size)
+        # Slice-22: separate encoder for the secondary FFT (smaller frame).
+        secondary_encoder = (
+            FftAdpcmEncoder(self.secondary_fft_size)
+            if self.send_secondary_fft
+            else None
+        )
         audio_encoder = AudioAdpcmSyncEncoder()
         audio_rate = self.requested_output_rate or 12_000
         t = 0.0
@@ -275,6 +320,21 @@ class FakeOpenWebRxServer:
                 pcm = (10_000 * np.sin(2 * np.pi * 700.0 * times)).astype(np.int16)
                 await ws.send(b"\x02" + audio_encoder.encode(pcm))
                 t += n / audio_rate
+                # Slice-22: secondary FFT frame (tag 0x03) — same ADPCM
+                # codec as primary, smaller bin count. The "channel scope"
+                # view: a single tone at 700 Hz (audio carrier offset)
+                # sitting on a noise floor.
+                if self.send_secondary_fft and secondary_encoder is not None:
+                    sec_bins = np.full(
+                        self.secondary_fft_size, self.floor_db, dtype=np.float32
+                    )
+                    # A tone at 700 Hz in the 8 kHz channel: bin = 700 /
+                    # 8000 * fft_size = ~5.6 → bin 6.
+                    tone_bin = int(
+                        round(700.0 / self.secondary_samp_rate * self.secondary_fft_size)
+                    ) % self.secondary_fft_size
+                    sec_bins[tone_bin] = self.peak_db
+                    await ws.send(b"\x03" + secondary_encoder.encode(sec_bins))
                 frame_idx += 1
                 await asyncio.sleep(self.frame_interval)
         except websockets.exceptions.ConnectionClosed:
@@ -291,16 +351,26 @@ async def _collect(
     *,
     want_fft: int = 1,
     want_audio: int = 1,
+    want_secondary: int = 0,
     budget_s: float = 6.0,
-) -> tuple[list, list]:
-    """Consume display_stream() until enough frames arrive (or budget spent)."""
+) -> tuple[list, list, list]:
+    """Consume display_stream() until enough frames arrive (or budget spent).
+
+    Slice-22 extension: optionally collects RemoteSecondaryFftFrame
+    separately (the third return list).
+    """
     fft_frames: list = []
     audio_frames: list = []
+    secondary_frames: list = []
     gen = source.display_stream()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget_s
     try:
-        while len(fft_frames) < want_fft or len(audio_frames) < want_audio:
+        while (
+            len(fft_frames) < want_fft
+            or len(audio_frames) < want_audio
+            or len(secondary_frames) < want_secondary
+        ):
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
@@ -310,11 +380,13 @@ async def _collect(
                 break
             if isinstance(frame, RemoteAudioFrame):
                 audio_frames.append(frame)
+            elif isinstance(frame, RemoteSecondaryFftFrame):
+                secondary_frames.append(frame)
             elif isinstance(frame, RemoteFftFrame):
                 fft_frames.append(frame)
     finally:
         await gen.aclose()
-    return fft_frames, audio_frames
+    return fft_frames, audio_frames, secondary_frames
 
 
 async def _wait_for(predicate, budget_s: float = 3.0) -> None:
@@ -487,7 +559,7 @@ async def test_handshake_config_and_initial_tuning(fake_rx):
     source = RemoteDisplaySource(
         host="127.0.0.1", port=fake_rx.port, freq=3_570_000, mod="lsb", squelch=-150
     )
-    fft, audio = await _collect(source, want_fft=2, want_audio=2)
+    fft, audio, _ = await _collect(source, want_fft=2, want_audio=2)
     assert len(fft) >= 2 and len(audio) >= 2
 
     # server saw an honest handshake + rate request + dsp start
@@ -524,7 +596,7 @@ async def test_handshake_config_and_initial_tuning(fake_rx):
 
 async def test_frames_decode_correctly(fake_rx):
     source = RemoteDisplaySource(host="127.0.0.1", port=fake_rx.port)
-    fft, audio = await _collect(source, want_fft=3, want_audio=3)
+    fft, audio, _ = await _collect(source, want_fft=3, want_audio=3)
 
     frame = fft[0]
     assert frame.bins.dtype == np.float32
@@ -635,7 +707,7 @@ async def test_backoff_is_a_clean_error():
     try:
         source = RemoteDisplaySource(host="127.0.0.1", port=server.port)
         with pytest.raises(RuntimeError, match="refused the connection"):
-            await _collect(source, want_fft=1, want_audio=1, budget_s=3.0)
+            await _collect(source, want_fft=1, want_audio=1, budget_s=3.0)  # noqa: F841
     finally:
         await server.stop()
 
@@ -644,12 +716,136 @@ async def test_connect_failure_is_clean():
     # nothing is listening on this port
     source = RemoteDisplaySource(host="127.0.0.1", port=1, connect_timeout=2.0)
     with pytest.raises(RuntimeError, match="cannot reach"):
-        await _collect(source, want_fft=1, want_audio=1, budget_s=5.0)
+        await _collect(source, want_fft=1, want_audio=1, budget_s=5.0)  # noqa: F841
+
+
+# ---------------------------------------------------------------------------
+# Slice-22: secondary FFT (0x03) frame forwarding
+# ---------------------------------------------------------------------------
+
+
+async def test_secondary_fft_frames_decode_with_config():
+    """Slice-22: when the remote emits a `secondary_config` JSON message
+    followed by 0x03 binary frames, the federation client must decode
+    them as RemoteSecondaryFftFrame (with the right center_freq /
+    sample_rate from the config message)."""
+    server = FakeOpenWebRxServer(send_secondary_fft=True)
+    await server.start()
+    try:
+        source = RemoteDisplaySource(
+            url=f"http://127.0.0.1:{server.port}/#freq=3570000,mod=lsb,sql=-150"
+        )
+        fft, _, secondary = await _collect(
+            source, want_fft=1, want_audio=0, want_secondary=1, budget_s=8.0
+        )
+        assert len(fft) >= 1, "primary FFT frames should still arrive"
+        assert len(secondary) >= 1, "at least one secondary FFT frame expected"
+        # Validate the decoded frame carries the config values.
+        frame = secondary[0]
+        assert isinstance(frame, RemoteSecondaryFftFrame)
+        assert frame.center_freq == server.secondary_center_freq
+        assert frame.sample_rate == server.secondary_samp_rate
+        # The bins should be float32 with the right length.
+        assert frame.bins.dtype == np.float32
+        assert len(frame.bins) == server.secondary_fft_size
+        # The tone at 700 Hz should be visible — peak > floor.
+        # (We can't assert the exact bin because ADPCM quantization +
+        # the encoder's exact tone-bin rounding may shift by ±1; just
+        # check the peak is well above the floor.)
+        peak = float(np.max(frame.bins))
+        floor = float(np.percentile(frame.bins, 50))
+        assert peak > floor + 10.0, (
+            f"secondary FFT should show a tone above the floor: "
+            f"peak={peak}, floor={floor}"
+        )
+        # min_db / max_db come from waterfall_levels in the secondary_config.
+        assert frame.min_db == -90.0
+        assert frame.max_db == -20.0
+    finally:
+        await server.stop()
+
+
+async def test_secondary_fft_frames_absent_when_not_configured():
+    """Without send_secondary_fft=True, the server never sends 0x03 frames
+    and the federation client never yields a RemoteSecondaryFftFrame."""
+    server = FakeOpenWebRxServer(send_secondary_fft=False)
+    await server.start()
+    try:
+        source = RemoteDisplaySource(
+            url=f"http://127.0.0.1:{server.port}/#freq=3570000,mod=lsb,sql=-150"
+        )
+        fft, _, secondary = await _collect(
+            source, want_fft=1, want_audio=0, want_secondary=0, budget_s=3.0
+        )
+        assert len(fft) >= 1
+        assert secondary == []
+    finally:
+        await server.stop()
+
+
+async def test_secondary_fft_session_forwards_as_wrsf_wire_frame(fake_rx):
+    """Slice-22 end-to-end: a secondary FFT frame from the federation
+    client flows through ReceiverSession and emerges on the WS as a
+    binary "WRSF" frame with the right magic / center_freq / bin count."""
+    # Reconfigure the fake to emit secondary FFT frames.
+    fake_rx.send_secondary_fft = True
+    fake_rx.secondary_fft_size = 64
+    fake_rx.secondary_samp_rate = 8_000
+    fake_rx.secondary_center_freq = 3_570_000
+
+    source = RemoteDisplaySource(
+        url=f"http://127.0.0.1:{fake_rx.port}/#freq=3570000,mod=lsb,sql=-150"
+    )
+    session = ReceiverSession(
+        receiver_id="rx-secondary-test",
+        source=source,  # type: ignore[arg-type]
+        center_freq=3_568_000,
+        sample_rate=240_000,
+        mode="LSB",
+    )
+    try:
+        await session.start()
+        # Collect a few broadcast frames. The session broadcasts via the
+        # _broadcast callback — register a simple list-collecting subscriber.
+        captured: list[bytes] = []
+        original_broadcast = session._broadcast
+        # Use a manual wrap that captures args.
+        async def capture(frame_bytes: bytes) -> None:
+            captured.append(frame_bytes)
+        session._broadcast = capture  # type: ignore[method-assign]
+        # Wait long enough to capture at least one secondary frame (the
+        # fake's frame_interval is 0.05 s; secondary frames arrive at
+        # the same rate).
+        deadline = asyncio.get_running_loop().time() + 6.0
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+            if any(b[:4] == b"WRSF" for b in captured):
+                break
+        # Restore.
+        session._broadcast = original_broadcast  # type: ignore[method-assign]
+        # Verify at least one WRSF frame was broadcast.
+        wrsf_frames = [b for b in captured if b[:4] == b"WRSF"]
+        assert wrsf_frames, (
+            "expected at least one WRSF frame on the WS broadcast"
+        )
+        # Parse the first one's header to verify the layout.
+        import struct as _struct
+        magic, ver, rx_hash, center, samp_rate, min_db, max_db, n_bins = (
+            _struct.unpack("<IIIffffI", wrsf_frames[0][:32])
+        )
+        # Magic is the SECONDARY_FFT_HEADER_MAGIC constant — check the bytes.
+        assert magic == 0x46535257, f"magic was {magic:#x}, expected WRSF"
+        assert n_bins == fake_rx.secondary_fft_size
+        assert int(center) == fake_rx.secondary_center_freq
+        assert int(samp_rate) == fake_rx.secondary_samp_rate
+    finally:
+        await session.stop()
 
 
 # ---------------------------------------------------------------------------
 # ReceiverSession integration (WRFO/AUDI wire formats, tuning plumbing)
 # ---------------------------------------------------------------------------
+
 
 
 async def test_session_display_path_end_to_end(fake_rx):

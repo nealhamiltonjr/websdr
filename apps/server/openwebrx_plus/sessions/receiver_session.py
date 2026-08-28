@@ -50,6 +50,7 @@ from ..plugins.registry import decoder_registry
 from ..sources.base import (
     RemoteAudioFrame,
     RemoteFftFrame,
+    RemoteSecondaryFftFrame,
     Source,
     SourceRegistry,
 )
@@ -67,6 +68,14 @@ FFT_HEADER_SIZE_BYTES = 32
 # 8 fields: magic(u32) version(u32) rxIdHash(u32) centerFreq(f32) sampleRate(f32)
 #           minDb(f32) maxDb(f32) binCount(u32)  → 8 × 4 = 32 bytes
 _HEADER_PACK_FMT = "<IIIffffI"
+
+# Slice-22: secondary FFT wire format. Same layout as the primary FFT
+# (32-byte header + bin body), distinct magic so the frontend WS demux
+# routes the frames to a separate stream. MUST match
+# packages/shared-types/src/fft.ts.
+SECONDARY_FFT_HEADER_MAGIC = 0x46535257  # "WRSF"
+SECONDARY_FFT_HEADER_VERSION = 1
+SECONDARY_FFT_HEADER_SIZE_BYTES = 32
 
 # Wire-format constants — MUST match packages/shared-types/src/audio.ts
 AUDIO_HEADER_MAGIC = 0x41554449  # "AUDI"
@@ -713,6 +722,14 @@ class ReceiverSession:
                     if frame.max_db is not None:
                         self.max_db = float(frame.max_db)
                     await self._broadcast(self._pack_fft_frame(frame.bins))
+                elif isinstance(frame, RemoteSecondaryFftFrame):
+                    # Slice-22: forward the secondary FFT frame as a
+                    # separate "WRSF" wire frame so the frontend WS demux
+                    # routes it to a secondary waterfall stream. We do NOT
+                    # update self.center_freq / sample_rate from the
+                    # secondary — those describe the demod channel, not
+                    # the wideband span the primary FFT covers.
+                    await self._broadcast(self._pack_secondary_fft_frame(frame))
                 elif isinstance(frame, RemoteAudioFrame):
                     await self._broadcast(
                         self._pack_audio_frame(frame.pcm, int(frame.sample_rate))
@@ -746,6 +763,28 @@ class ReceiverSession:
             float(self.min_db),
             float(self.max_db),
             self.fft_size,
+        )
+        return header + bytes(bins)
+
+    def _pack_secondary_fft_frame(self, frame: RemoteSecondaryFftFrame) -> bytes:
+        """Pack one secondary FFT frame into the binary wire format.
+
+        Slice-22: same 32-byte header layout as the primary, distinct
+        magic ("WRSF"). The center_freq / sample_rate come from the
+        remote's ``secondary_config`` JSON message — they describe the
+        DEMOD channel (much narrower than the wideband span).
+        """
+        bins = frame.bins
+        header = struct.pack(
+            _HEADER_PACK_FMT,
+            SECONDARY_FFT_HEADER_MAGIC,
+            SECONDARY_FFT_HEADER_VERSION,
+            self._receiver_id_hash,
+            float(frame.center_freq),
+            float(frame.sample_rate),
+            float(frame.min_db) if frame.min_db is not None else 0.0,
+            float(frame.max_db) if frame.max_db is not None else 0.0,
+            len(bins),
         )
         return header + bytes(bins)
 

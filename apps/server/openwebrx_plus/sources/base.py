@@ -200,6 +200,33 @@ class RemoteFftFrame:
 
 
 @dataclass(frozen=True)
+class RemoteSecondaryFftFrame:
+    """One pre-computed secondary FFT frame (slice-22 — federation polish).
+
+    The OpenWebRX federation protocol carries a SECONDARY FFT stream
+    (Type 0x03 frames) — the narrowband spectrum of the demodulated
+    channel. For digital modes (FT8, CW, PSK31) this is the "channel
+    scope" view showing the FSK tones or CW sidetone within the
+    demod passband.
+
+    Same shape as :class:`RemoteFftFrame` but the center_freq /
+    sample_rate describe the SECONDARY channel (the demod channel),
+    not the wideband span. The session repacks these into the
+    ``SECONDARY_FFT_HEADER_MAGIC`` wire format so the frontend WS
+    demux routes them to a separate stream.
+
+    ``bins`` are float32 dB values, DC-centered, same as
+    :class:`RemoteFftFrame`.
+    """
+
+    bins: np.ndarray
+    center_freq: int  # Hz — the demod channel center (often the tuned freq)
+    sample_rate: int  # Hz — the demod channel span (much narrower than wideband)
+    min_db: float | None = None
+    max_db: float | None = None
+
+
+@dataclass(frozen=True)
 class RemoteAudioFrame:
     """One chunk of demodulated audio from a remote receiver."""
 
@@ -227,8 +254,10 @@ class DisplayStreamSource(Protocol):
 
     def display_stream(
         self,
-    ) -> AsyncGenerator[RemoteFftFrame | RemoteAudioFrame, None]:
-        """Yield remote FFT/audio frames until the connection ends.
+    ) -> AsyncGenerator[
+        RemoteFftFrame | RemoteSecondaryFftFrame | RemoteAudioFrame, None
+    ]:
+        """Yield remote FFT/secondary-FFT/audio frames until the connection ends.
 
         Raises RuntimeError on connect failure or remote refusal
         (``backoff``) — display sources never retry on their own.
