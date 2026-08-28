@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import socket
 import struct
 
 import httpx
@@ -31,7 +30,6 @@ from websockets.asyncio.server import Server, ServerConnection
 
 from openwebrx_plus.sources import SDRangelSource, SourceRegistry
 from openwebrx_plus.sources.base import RemoteFftFrame
-
 
 # ============================================================================
 # Manifest scaffold tests (slice-20) — still apply, mostly unchanged
@@ -237,12 +235,10 @@ async def test_display_stream_yields_fft_frames(fake_sdrangel: FakeSDRangelServe
         connect_timeout=5.0,
     )
     # Override the HTTP client to use the ASGI transport (no real socket).
-    # This is the same pattern as httpx's ASGI test client.
-
-    # We need to intercept the httpx.AsyncClient construction in
-    # display_stream(). The cleanest way: monkey-patch the source's
-    # _http_client directly via a wrapper.
-    captured_puts = []
+    # This is the same pattern as httpx's ASGI test client. We monkey-patch
+    # the source's _http_client directly — display_stream() respects an
+    # externally-injected client (owns_http=False) and skips its own
+    # construction + cleanup.
 
     async def _make_http():
         transport = httpx.ASGITransport(app=fake_sdrangel.rest_app)
@@ -271,7 +267,7 @@ async def test_display_stream_yields_fft_frames(fake_sdrangel: FakeSDRangelServe
                     frames.append(frame)
                     if len(frames) >= 3:
                         break
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass  # drained enough
 
         assert len(frames) == 3, f"expected 3 frames, got {len(frames)}"
@@ -339,7 +335,7 @@ async def test_display_stream_puts_device_settings_on_start(fake_sdrangel: FakeS
             async with asyncio.timeout(2.0):
                 async for _ in gen:
                     break
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
         # The fake REST should have recorded one PUT with centerFrequency=14_200_000
         assert len(fake_sdrangel.received_device_puts) >= 1
