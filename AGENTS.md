@@ -42,8 +42,8 @@ and `docs/STATUS.md` (living status snapshot).
 
 ```bash
 # from the repo root
-scripts/run-server-tests.sh                              # 229+ tests, ~70 s
-cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit  # 95+ tests, types
+scripts/run-server-tests.sh                              # 542+ tests, ~90 s
+cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit  # 178+ tests, types
 cd apps/web && pnpm run build                            # vite production build
 cd apps/server && .venv/bin/ruff check .                 # lint clean
 cd apps/server && .venv/bin/mypy openwebrx_plus         # strict types clean
@@ -55,11 +55,12 @@ Every gate must be green before a sync-up push. No exceptions.
 
 ```
 apps/server/openwebrx_plus/
-  sources/     11 source backends (rtl_sdr, rtl_tcp, airspy, sdrplay, soapy,
-                kiwi, spyserver, openwebrx_remote, wideband, file_source, simulated)
+  sources/     12 source backends (rtl_sdr, rtl_tcp, airspy, sdrplay, soapy,
+                kiwi, spyserver, openwebrx_remote, sdrangel, wideband, file_source, simulated)
   dsp/         pycsdr chains: FftChain (FFT wire format) + AudioChain (6 modes)
+                + ai_denoise.py (numpy Stage 2a) + ai_denoise_rust.py (Rust cdylib, slice-36)
   sessions/    ReceiverSession (IQ + display-stream paths) + SessionRegistry
-  plugins/     DecoderPlugin ABC + adsb.py (in-process) + dump1090.py + subprocess.py
+  plugins/     DecoderPlugin ABC + adsb/ais/dump978/cw/ft8 (in-process) + dump1090 (subprocess)
   api/         rest.py (control) + ws.py (streams) — binary FFT/audio frames
   config/      Settings (TOML + env via pydantic-settings)
   observability/  structlog setup
@@ -73,10 +74,10 @@ apps/web/src/
   lib/audio/   AudioPlayer (Web Audio scheduled buffers)
   sessions/    ReceiverSession, receiverTuning, tuneBus
   workers/     sdr.shared-worker.ts (one WS per receiver, fan-out)
-packages/     dsp-zig/ ai-rust/ rnnoise-wasm/ dsp-c/ (intentional stubs, ADR-002)
+packages/     dsp-zig/ (stub) ai-rust/ (Rust cdylib, slice-36 wired) rnnoise-wasm/ (loader, slice-24) dsp-c/ (placeholder)
               shared-types/ (TS + Python mirrors of wire formats)
-ADR/           6 accepted ADRs (workspace, DSP+AI cascade, decoders, pycsdr/sources,
-               VFO wideband, federation)
+ADR/           7 accepted ADRs (workspace, DSP+AI cascade, decoders, pycsdr/sources,
+               VFO wideband, federation, IQ-to-audio-enhancement [rejected])
 docs/          AI-HANDOFF.md (deep orientation), STATUS.md (living snapshot),
                slice-01-plan.md (original plan, kept for history)
 scripts/       run-server-tests.sh (portable test runner),
@@ -117,8 +118,8 @@ Open follow-ups:
 - <deferred item, if any>
 
 Quality gates:
-- server: 229/229 tests, mypy strict, ruff clean
-- web: 95/95 tests, tsc clean, vite build clean
+- server: 542/542 tests, mypy strict, ruff clean
+- web: 178/178 tests, tsc clean, vite build clean
 ```
 
 ## When you don't know what to do

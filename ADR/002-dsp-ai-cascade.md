@@ -1,7 +1,7 @@
 # ADR-002: DSP + AI Cascade (Four-Mode Pipeline)
 
-**Status:** Accepted — control surface + raw/classic LIVE (slice-4.7); ai/cascade gated on the DeepFilterNet module
-**Date:** 2026-08-26 (updated 2026-08-27)
+**Status:** Accepted — all four modes LIVE (raw/classic since slice-4.7; ai/cascade since slice-10 via in-process numpy AIDenoiser; Rust cdylib acceleration wired in slice-36)
+**Date:** 2026-08-26 (updated 2026-08-29)
 **Related:** Pillar 1 (DSP+AI Cascade), ADR-001
 
 ## Context
