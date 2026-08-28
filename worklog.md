@@ -648,3 +648,112 @@ an AudioWorkletProcessor.
   both load the WASM inside the worklet (Safari 16.x explicitly
   excluded; check Safari 17+ when the AudioWorklet import() spec
   support lands).
+
+---
+## slice-25 (2026-08-28): SDRangel REST+WS streaming v1 — closes slice-20 scaffold
+
+**Goal:** close the slice-20 STATUS.md open item "the actual REST+WS
+streaming implementation lands in a future slice." Slice-20 shipped
+the manifest scaffold (raises NotImplementedError on spawn); slice-25
+ships the v1 spectrum-only streaming impl.
+
+**Shipped:**
+- `apps/server/openwebrx_plus/sources/sdrangel.py`: fully rewritten
+  (was the slice-20 scaffold). Now implements the DisplayStreamSource
+  protocol via `display_stream()` (not `spawn()` — the ReceiverSession
+  detects DisplayStreamSource via hasattr(source, 'display_stream')
+  and bypasses its raw-IQ chains, repacking frames into the WRFO wire
+  format).
+  - `display_stream()`:
+    1. Creates an httpx.AsyncClient (or uses an externally-injected
+       one — test injection pattern; owns_http flag controls cleanup).
+    2. Probes GET /sdrangel/devices to confirm the device_set exists.
+    3. PUTs /sdrangel/deviceset/{id}/device/settings with the initial
+       center frequency (set via tune() before display_stream() or 0
+       by default).
+    4. Opens the spectrum WebSocket at
+       ws://host:port/sdrangel/spectrumserver?deviceset={id}.
+    5. Reads JSON start metadata frames (updates _remote_fft_size /
+       _remote_sample_rate / _remote_center_freq / _remote_min_db /
+       _remote_max_db from the {"type":"start",...} payload).
+    6. Reads binary spectrum frames, yields one RemoteFftFrame per
+       frame. Two binary layouts auto-detected by length math:
+         A. 4-byte LE header (uint16 size + uint16 history) +
+            size*float32 bins.
+         B. Bare float32 bins (no header).
+    7. finally block closes the WS + HTTP client (if we own it).
+  - `tune(freq_hz)`: if streaming, re-PUTs device settings on the
+    live HTTP client. If not yet streaming, stores the freq for the
+    upcoming display_stream() initial PUT.
+  - `set_mode(mode)`: NOT IMPLEMENTED in v1 (spectrum-only). Raises
+    NotImplementedError with an actionable message pointing to the
+    future implementation plan (POST /deviceset/{id}/channel + PUT
+    /deviceset/{id}/channel/{cid}/settings).
+  - `close()`: no-op (display_stream()'s finally block handles cleanup).
+  - Optional basic auth: username/password constructor args →
+    Authorization header.
+  - use_tls flag: https:// REST + wss:// WS for instances behind TLS
+    reverse proxies.
+
+- `apps/server/tests/test_sdrangel_driver.py`: rewrote + extended.
+  - 11 slice-20 manifest scaffold tests retained (manifest registration,
+    constructor validation, default port/sample rate, user agent).
+  - 14 new slice-25 v1 streaming tests using a FakeSDRangelServer
+    (ASGI app for REST + websockets.serve for the spectrum WS):
+    * display_stream() yields 3 RemoteFftFrame per 3 binary spectrum
+      frames; each frame has the expected bins/center_freq/sample_rate.
+    * display_stream() rejects an out-of-range device_set with
+      RuntimeError.
+    * display_stream() PUTs /deviceset/0/device/settings on startup
+      with the centerFrequency that tune() set before streaming.
+    * tune() while streaming re-PUTs new device settings.
+    * close() outside the streaming loop is a no-op.
+    * set_mode() raises NotImplementedError (spectrum-only v1).
+    * tune() before streaming stores the freq for the initial PUT.
+    * _parse_spectrum_frame accepts both pattern A (header) and
+      pattern B (bare float32) layouts.
+    * _parse_spectrum_frame rejects frames shorter than 4 bytes.
+    * _handle_text captures JSON start metadata (size, sampleRate,
+      centerFrequency, minDb, maxDb) — including the edge case
+      where maxDb is 0.0 (falsy in Python; fixed with explicit
+      None checks instead of `or`).
+    * _handle_text ignores non-JSON text frames (server chatter).
+    * _auth_headers produces a Basic Authorization header when
+      username/password are set; omits it otherwise.
+  - 25 tests total (11 prior + 14 new). All pass in ~0.6 s.
+
+**Bug fix discovered while writing tests:** the original `_handle_text`
+used `data.get("maxDb") or data.get("max_db")` which skipped legitimately
+zero max_db values (0.0 is falsy). Fixed with explicit None checks:
+```python
+maxdb = data.get("maxDb")
+if maxdb is None:
+    maxdb = data.get("max_db")
+```
+
+**Quality gates verified (all green):**
+- mypy openwebrx_plus (CI invocation, pyproject strict=true): Success,
+  no issues found in 57 source files.
+- ruff check openwebrx_plus: All checks passed!
+- server pytest: 466 passed, 1 skipped (84% coverage, ~75 s; was 456,
+  +10 from the 14 new SDRangel tests minus the 4 deprecated spawn/
+  tune/set_mode scaffold tests that no longer apply).
+- web gates (vitest/tsc/vite build): not touched in this slice;
+  verified green in slice-24.
+
+**Sync:** will commit + push next.
+
+**Future work remaining:**
+- set_mode() implementation: POST /deviceset/{id}/channel to add a
+  channel (NFM/WFM/AM/LSB/USB/CW), then PUT
+  /deviceset/{id}/channel/{cid}/settings to configure it. ~half a day.
+- Audio-over-WS path: SDRangel has no built-in audio-over-WS; v2 needs
+  to wire SDRangel's UDP-sink channel to a local UDP port we read
+  from, then translate to RemoteAudioFrame. ~half a day.
+- Live bring-up: the wire literals (REST endpoint paths, JSON
+  metadata field names, binary frame layout) are codified by the
+  fake server; the FIRST connection to a real SDRangel instance
+  should verify (a) REST endpoint paths, (b) JSON field name
+  variants (size vs fftSize, sampleRate vs sample_rate), (c) the
+  binary frame layout. Adjust the `_*` constants in
+  sources/sdrangel.py if needed.
