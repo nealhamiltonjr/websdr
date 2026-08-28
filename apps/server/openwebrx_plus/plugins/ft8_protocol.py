@@ -333,16 +333,27 @@ def add_crc(message_bits: list[int]) -> list[int]:
 
 
 def add_ldpc_parity(systematic_bits: list[int]) -> list[int]:
-    """Append 83 LDPC parity bits → 174-bit LDPC codeword (synthetic test frames).
+    """Append 83 LDPC parity bits → 174-bit LDPC codeword (v2 real parity).
 
-    v1: just pads with zeros (the parity is unused — we skip the LDPC
-    syndrome check in v1; if a real LDPC decoder lands in v2, this stub
-    will be replaced with the actual parity computation using the
-    published H matrix).
+    Slice-28 v2: replaces the v1 zero-pad stub with real LDPC encoding
+    using the WSJT-X FT8 (174, 91) generator matrix. The output is a
+    valid LDPC codeword (syndrome check passes; see
+    :mod:`openwebrx_plus.plugins.ft8_ldpc`).
+
+    Args:
+        systematic_bits: 91 bits (77 message + 14 CRC), MSB-first.
+
+    Returns:
+        174 bits (91 systematic + 83 parity), MSB-first.
     """
+    # Local import avoids a circular dependency at module-load time
+    # (ft8_ldpc imports numpy but not ft8_protocol; ft8_protocol now
+    # depends on ft8_ldpc).
+    from .ft8_ldpc import encode_ldpc
+
     if len(systematic_bits) != FT8_PAYLOAD_BITS + FT8_CRC_BITS:
         raise ValueError(
             f"systematic must be {FT8_PAYLOAD_BITS + FT8_CRC_BITS} bits, "
             f"got {len(systematic_bits)}"
         )
-    return list(systematic_bits) + [0] * FT8_LDPC_PARITY_BITS
+    return encode_ldpc(systematic_bits)

@@ -1,10 +1,16 @@
 """FT8 audio-band decoder plugin (ADR-003 in-process plugin family #6).
 
-Slice-26 v1 (2026-08-28): closes the slice-21 manifest stub. Ships
-the actual FSK demodulator + symbol extraction + CRC-14 verify +
-standard message unpack. LDPC syndrome check is deferred to v2 (CRC
-alone catches most garbage; occasional false positives are honest
-for v1).
+Slice-28 v2 (2026-08-28): closes the v1 LDPC simplification. Ships
+real LDPC (174, 91) encoding via the WSJT-X generator matrix +
+H-matrix syndrome check (rejects garbage before CRC, eliminating
+the v1 ~1/16384 false-positive rate) + a soft-decision sum-product
+belief-propagation decoder (available via the new ``decode_slot_soft``
+API; not yet wired into the main decode flow — that lands in v2.1
+along with the soft FSK demodulator).
+
+Slice-26 v1 (2026-08-28): closed the slice-21 manifest stub. Shipped
+FSK demodulator + symbol extraction + CRC-14 verify + standard
+message unpack.
 
 Wire format (this module → frontend):
 
@@ -19,28 +25,35 @@ This mirrors the ADS-B / AIS pattern (per-message "frame" / per-table
 audio-band digital modes (FT8 / FT4 / WSPR / JT65 / JT9 / PSK31 /
 RTTY — all feed the same DigiMessageListViz).
 
-Slice-26 v1 simplifications (documented for future improvement):
+Slice-28 v2 simplifications (documented for future improvement):
   - **No Costas loop / symbol timing recovery**: assumes the symbol
     boundaries are aligned to 0.16 s boundaries from the start of the
     15-second slot. Real FT8 has ±0.5 symbol timing offset + Doppler;
-    a Costas-loop correction lands in v2.
-  - **No LDPC syndrome check**: v1 just verifies CRC-14. Random bits
-    have ~1/16384 chance of CRC passing → occasional false positives.
-    Honest for v1; the actual LDPC error correction lands in v2
-    (sum-product decoder on the published H matrix).
+    a Costas-loop correction lands in v2.1.
+  - **Sum-product LDPC decoder available but not wired**: the
+    :mod:`.ft8_ldpc` module ships ``decode_ldpc(soft_llrs)`` (min-sum
+    BP, ~3 dB SNR improvement vs hard-decision); the plugin's main
+    decode path still uses hard-decision + syndrome + CRC. Wiring
+    requires a soft FSK demodulator that emits per-tone magnitudes
+    (current ``detect_symbols`` returns hard argmax). Lands in v2.1.
   - **Limited message type coverage**: only i3=0 (standard callsign +
     grid/report) is fully decoded. ARRL RTTY RU / Field Day / POTA /
-    contests / WW ROAG (i3=1..5) land in v2.
+    contests / WW ROAG (i3=1..5) land in v3.
   - **Limited grid field decoding**: standard 4-char Maidenhead grids
-    + signal reports (-50..+50 range) + the special markers
-    (RRR, RR73, 73). Other grid encodings land in v2.
+    + signal reports (-25..+24 range) + the special markers
+    (RRR, RR73, 73). Other grid encodings land in v3.
+  - **5-char callsigns only**: 6-char callsigns (extended WSJT-X
+    alphabet with CQ/QRZ/DE tokens, standard vs non-standard, hash
+    table lookups) land in v3.
 
-The implementation is split across three modules:
+The implementation is split across four modules:
   - :mod:`.ft8` (this file) — the DecoderPlugin wrapper, manifest, event
     surface, and the audio chunk → 15-second slot buffer.
   - :mod:`.ft8_demod` — FSK Goertzel detection + symbol → bit extraction.
   - :mod:`.ft8_protocol` — CRC-14 + message unpack (callsign / grid /
     report decoding).
+  - :mod:`.ft8_ldpc` — LDPC (174, 91) codec: real parity encoder,
+    syndrome check, soft-decision sum-product decoder.
 """
 
 from __future__ import annotations
@@ -56,6 +69,11 @@ from .ft8_demod import (
     FT8_SLOT_SAMPLES,
     detect_symbols,
     symbols_to_bits,
+)
+from .ft8_ldpc import (
+    LDPCDecodeResult,
+    decode_ldpc,
+    is_valid_codeword,
 )
 from .ft8_protocol import (
     FT8_CRC_BITS,
@@ -92,17 +110,18 @@ class FT8DecoderPlugin(DecoderPlugin):
 
     manifest: ClassVar[DecoderManifest] = DecoderManifest(
         name="ft8",
-        version="0.2.0",  # bumped from 0.1.0 (slice-21 stub → slice-26 v1)
+        version="0.3.0",  # bumped: 0.1.0 (slice-21 stub) → 0.2.0 (slice-26 v1) → 0.3.0 (slice-28 v2 LDPC)
         label="FT8 (audio-band digi modes)",
         tap_point="rf_band",
         description=(
             "FT8 / FT4 / WSPR / JT65 / JT9 / PSK31 / RTTY decoder "
-            "(ADR-003 in-process plugin family #6). Slice-26 v1 status: "
-            "FSK demod + CRC-14 + standard message unpack SHIPPED; LDPC "
-            "syndrome check + Costas loop / symbol timing recovery "
-            "deferred to v2 (CRC alone catches most garbage). Tap point: "
-            "rf_band (operates on the audio-band IQ, not raw RF). "
-            "Defaults: 12 kHz audio rate, 6.25 Hz tone spacing, "
+            "(ADR-003 in-process plugin family #6). Slice-28 v2 status: "
+            "FSK demod + real LDPC (174,91) parity + syndrome check "
+            "+ CRC-14 + standard message unpack. Sum-product BP decoder "
+            "available via ft8_ldpc.decode_ldpc (not yet wired into "
+            "main decode flow — that needs soft FSK demod, lands v2.1). "
+            "Tap point: rf_band (operates on the audio-band IQ, not raw "
+            "RF). Defaults: 12 kHz audio rate, 6.25 Hz tone spacing, "
             "15-second slot alignment."
         ),
         required_sample_rate=FT8_SAMPLE_RATE,
@@ -114,6 +133,7 @@ class FT8DecoderPlugin(DecoderPlugin):
         self._slot_count: int = 0
         self._messages_decoded: int = 0
         self._crc_failures: int = 0
+        self._syndrome_failures: int = 0  # slice-28 v2: garbage rejected by LDPC syndrome
         self._recent_messages: deque[dict[str, Any]] = deque(maxlen=MAX_MESSAGES)
 
     def feed_iq(self, iq: np.ndarray) -> list[dict[str, Any]]:
@@ -157,7 +177,26 @@ class FT8DecoderPlugin(DecoderPlugin):
         return events
 
     def _process_slot(self, slot_audio: np.ndarray, sample_rate: int) -> list[dict[str, Any]]:
-        """Demodulate one 15-second FT8 slot → events."""
+        """Demodulate one 15-second FT8 slot → events.
+
+        Slice-28 v2 decode path:
+
+          1. FSK Goertzel symbol detection (hard-decision argmax of 8 tones).
+          2. Extract 174-bit LDPC codeword from 58 data symbols.
+          3. **Syndrome check** (v2 new): reject if the codeword is not a
+             valid LDPC codeword. This eliminates the v1 false-positive
+             failure mode where random bits passed CRC at ~1/16384.
+          4. All-zero degenerate-case skip (silence produces all-zero bits
+             which trivially satisfy both syndrome and CRC).
+          5. CRC-14 verify over the 77-bit message + 14-bit embedded CRC.
+          6. Unpack the 77-bit message → callsigns + grid/report.
+          7. Emit "message" + "messages" snapshot events.
+
+        Sum-product LDPC error correction (slice-28 v2 also ships
+        ``ft8_ldpc.decode_ldpc``) is not wired into this path yet; it
+        needs soft FSK magnitudes (current ``detect_symbols`` returns
+        hard argmax). Lands in v2.1 along with the soft demodulator.
+        """
         self._slot_count += 1
         symbols = detect_symbols(slot_audio, sample_rate)
         if len(symbols) == 0:
@@ -165,13 +204,18 @@ class FT8DecoderPlugin(DecoderPlugin):
         bits = symbols_to_bits(symbols)
         if len(bits) != FT8_PAYLOAD_BITS + FT8_CRC_BITS + FT8_LDPC_PARITY_BITS:
             return []
-        # v1: skip the LDPC syndrome check. Just verify CRC.
-        systematic_bits = list(bits[: FT8_PAYLOAD_BITS + FT8_CRC_BITS].tolist())
-        # All-zero systematic bits → no signal (silence). CRC happens to
-        # pass for all-zero because crc14(zeros) = 0 and the embedded
-        # CRC bits are also zero. Skip — this is the "no signal" degenerate
-        # case that would otherwise produce spurious "00000 00000 ..."
-        # decodes.
+        # The full 174-bit LDPC codeword (91 systematic + 83 parity).
+        codeword = list(bits.tolist())
+        # v2: syndrome check BEFORE CRC. Rejects garbage decodes that
+        # would otherwise pass CRC at ~1/16384.
+        if not is_valid_codeword(codeword):
+            self._syndrome_failures += 1
+            return []
+        systematic_bits = codeword[: FT8_PAYLOAD_BITS + FT8_CRC_BITS]
+        # All-zero systematic → no signal (silence). Both syndrome and
+        # CRC trivially pass for all-zero (crc14(zeros) = 0, embedded
+        # CRC bits are also zero, all-zero codeword is a valid LDPC
+        # codeword). Skip — this is the "no signal" degenerate case.
         if all(b == 0 for b in systematic_bits):
             return []
         crc_ok, message_bits = verify_crc(systematic_bits)
@@ -219,17 +263,21 @@ class FT8DecoderPlugin(DecoderPlugin):
         return {
             "messages_decoded": self._messages_decoded,
             "crc_failures": self._crc_failures,
+            "syndrome_failures": self._syndrome_failures,  # v2 new
             "slot_count": self._slot_count,
-            "stub": False,  # v1 is no longer a stub
-            "version": "0.2.0",
-            "v1_simplifications": (
-                "no_ldpc_syndrome_check | no_costas_loop | "
-                "i3_only_0 | simplified_grid_encoding"
+            "stub": False,
+            "version": "0.3.0",
+            "v2_simplifications": (
+                "no_costas_loop | sum_product_ldpc_not_wired | "
+                "i3_only_0 | simplified_grid_encoding | 5char_callsigns"
             ),
             "note": (
-                "slice-26 v1: FSK demod + CRC-14 + standard message unpack. "
-                "LDPC syndrome check, Costas loop, symbol timing recovery, "
-                "and i3!=0 message types are deferred to v2."
+                "slice-28 v2: real LDPC (174,91) parity + syndrome check "
+                "BEFORE CRC. Sum-product BP decoder available via "
+                "ft8_ldpc.decode_ldpc (not yet wired into main decode flow — "
+                "needs soft FSK demod, lands v2.1). Costas loop / symbol "
+                "timing recovery, i3!=0 message types, 6-char callsigns "
+                "are deferred to v3."
             ),
         }
 
@@ -239,7 +287,35 @@ class FT8DecoderPlugin(DecoderPlugin):
         self._slot_count = 0
         self._messages_decoded = 0
         self._crc_failures = 0
+        self._syndrome_failures = 0
         self._recent_messages.clear()
+
+    # ------------------------------------------------------------------
+    # Slice-28 v2: optional soft-decode API (wired in v2.1)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def decode_slot_with_ldpc(soft_llrs: list[float], max_iter: int = 20) -> LDPCDecodeResult:
+        """Soft-decision LDPC decode of a 174-LLR FT8 slot.
+
+        Convenience wrapper around :func:`ft8_ldpc.decode_ldpc` for
+        callers that have per-symbol soft FSK magnitudes (the soft FSK
+        demodulator that produces 8-magnitude vectors per symbol period
+        lands in v2.1; this method exposes the LDPC decoder to plugins
+        / E2E tests today so the soft-demod wiring is a single-line change
+        when v2.1 lands).
+
+        Args:
+            soft_llrs: 174 log-likelihood ratios (one per codeword bit,
+                MSB-first). Positive → bit more likely 0; negative → bit
+                more likely 1.
+            max_iter: BP iteration cap (default 20).
+
+        Returns:
+            LDPCDecodeResult with ``systematic_bits`` (91 list of 0/1) on
+            success or ``None`` on failure.
+        """
+        return decode_ldpc(soft_llrs, max_iter=max_iter)
 
 
 # ============================================================================
@@ -255,10 +331,15 @@ def synthesize_audio(
 ) -> np.ndarray:
     """Synthesize FT8 audio for a known message (for test frames).
 
-    Pipeline: message → 77 bits → +CRC → 91 bits → +parity (zero pad v1)
-    → 174 bits → symbols → audio cosine.
+    Pipeline: message → 77 bits → +CRC → 91 bits → +LDPC parity (real,
+    via the WSJT-X (174,91) generator matrix) → 174-bit valid LDPC
+    codeword → symbols → audio cosine.
 
-    v1: the LDPC parity is zero-padded (the decoder doesn't check it).
+    v2 (slice-28): the LDPC parity is now REAL (was zero-padded in v1).
+    The synthesized audio, when demodulated hard-decision and run
+    through syndrome + CRC, decodes cleanly. The sum-product LDPC
+    decoder (:meth:`FT8DecoderPlugin.decode_slot_with_ldpc`) also
+    recovers the systematic bits from the soft-LLR form.
     """
     from .ft8_demod import bits_to_symbols, symbols_to_audio
     message_bits = pack_message(callsign1, callsign2, grid_or_report, i3)

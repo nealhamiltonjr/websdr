@@ -1,11 +1,14 @@
-"""FT8 decoder plugin tests — slice-26 v1.
+"""FT8 decoder plugin tests — slice-28 v2.
 
 Slice-21 shipped the manifest scaffolding + wire-format types (DigiMessageEvent,
-DigiMessageListEvent). Slice-26 v1 ships the actual FSK demodulator +
-CRC-14 + standard message unpack. These tests verify:
+DigiMessageListEvent). Slice-26 v1 shipped the actual FSK demodulator +
+CRC-14 + standard message unpack. Slice-28 v2 (this revision) ships
+real LDPC (174,91) encoding + syndrome check + sum-product decoder.
+These tests verify:
 
-  - Manifest fields (unchanged from slice-21 except version bumped to 0.2.0).
-  - status() reports v1 state (no longer stub, has v1_simplifications).
+  - Manifest fields (unchanged from slice-21 except version bumped to 0.3.0).
+  - status() reports v2 state (real LDPC, syndrome_failures counter,
+    v2_simplifications reflecting remaining limitations).
   - CRC-14 round-trip: pack message + add CRC + verify CRC.
   - Callsign pack/unpack round-trip for standard callsigns.
   - Grid / report pack/unpack round-trip for standard forms.
@@ -14,6 +17,9 @@ CRC-14 + standard message unpack. These tests verify:
     feed_audio, verify the decoded message event matches.
   - The 8-tone Goertzel detection correctly identifies each tone
     in a synthetic single-tone signal.
+  - **Slice-28 v2 new**: add_ldpc_parity produces a VALID LDPC codeword
+    (syndrome is all-zero); the syndrome check rejects single-bit
+    errors; the sum-product decoder recovers from 1-3 bit errors.
 """
 
 from __future__ import annotations
@@ -37,6 +43,13 @@ from openwebrx_plus.plugins.ft8_demod import (
     symbols_to_audio,
     symbols_to_bits,
 )
+from openwebrx_plus.plugins.ft8_ldpc import (
+    LDPC_PARITY_CHECKS,
+    compute_syndrome,
+    decode_ldpc,
+    hard_decode,
+    is_valid_codeword,
+)
 from openwebrx_plus.plugins.ft8_protocol import (
     FT8_CODEWORD_BITS,
     FT8_CRC_BITS,
@@ -55,7 +68,7 @@ from openwebrx_plus.plugins.ft8_protocol import (
 )
 
 # ============================================================================
-# Manifest + status (slice-21 contract retained, updated for v1)
+# Manifest + status (slice-21 contract retained, updated for v2)
 # ============================================================================
 
 def test_plugin_manifest_fields() -> None:
@@ -63,31 +76,36 @@ def test_plugin_manifest_fields() -> None:
     p = FT8DecoderPlugin()
     m = p.manifest
     assert m.name == "ft8"
-    assert m.version == "0.2.0"  # bumped from 0.1.0 (slice-26 v1)
+    assert m.version == "0.3.0"  # bumped: 0.1.0 (stub) → 0.2.0 (v1) → 0.3.0 (v2 LDPC)
     assert m.tap_point == "rf_band"
     assert m.required_sample_rate == FT8_SAMPLE_RATE
     assert "message" in m.events
     assert "messages" in m.events
     assert "FT8" in m.label
-    # Description must clearly state v1 status + simplifications.
-    assert "slice-26" in m.description.lower()
-    assert "v1" in m.description.lower()
+    # Description must clearly state v2 status + the LDPC improvements.
+    assert "slice-28" in m.description.lower()
+    assert "v2" in m.description.lower()
     assert "ldpc" in m.description.lower()
+    assert "syndrome" in m.description.lower()
 
 
-def test_plugin_status_reports_v1_state() -> None:
-    """status() reports zero counters + the v1 simplifications list."""
+def test_plugin_status_reports_v2_state() -> None:
+    """status() reports zero counters + the v2 simplifications list."""
     p = FT8DecoderPlugin()
     s = p.status()
     assert s["messages_decoded"] == 0
     assert s["crc_failures"] == 0
+    assert s["syndrome_failures"] == 0  # v2 new counter
     assert s["slot_count"] == 0
-    assert s["stub"] is False  # v1 is no longer a stub
-    assert s["version"] == "0.2.0"
-    # The v1 simplifications are documented for transparency.
-    assert "no_ldpc_syndrome_check" in s["v1_simplifications"]
-    assert "no_costas_loop" in s["v1_simplifications"]
-    assert "slice-26 v1" in s["note"]
+    assert s["stub"] is False
+    assert s["version"] == "0.3.0"
+    # v2 simplifications reflect remaining limitations (Costas, soft-wire,
+    # 6-char callsigns, i3!=0).
+    assert "no_costas_loop" in s["v2_simplifications"]
+    assert "sum_product_ldpc_not_wired" in s["v2_simplifications"]
+    assert "i3_only_0" in s["v2_simplifications"]
+    assert "5char_callsigns" in s["v2_simplifications"]
+    assert "slice-28 v2" in s["note"]
 
 
 def test_ft8_constants_match_protocol_spec() -> None:
@@ -264,14 +282,180 @@ def test_add_crc_and_verify_round_trip() -> None:
     assert crc_ok
 
 
-def test_add_ldpc_parity_pads_to_174() -> None:
-    """The LDPC parity stub pads the 91-bit systematic to 174 bits."""
+def test_add_ldpc_parity_produces_valid_codeword() -> None:
+    """Slice-28 v2: add_ldpc_parity produces a VALID LDPC codeword.
+
+    Replaces the v1 zero-pad stub. The codeword is now 174 bits with
+    REAL LDPC parity computed from the WSJT-X (174,91) generator
+    matrix; the H-matrix syndrome of the result is all-zero.
+    """
     bits = pack_message("K1ABC", "K2DEF", "KO51")
     codeword = add_crc(bits)
     full = add_ldpc_parity(codeword)
     assert len(full) == 174
-    # v1: parity is zero-padded.
-    assert all(b == 0 for b in full[91:])
+    # v2: parity is REAL (was zero-padded in v1). The codeword is a
+    # valid LDPC codeword (syndrome is all-zero).
+    syndrome = compute_syndrome(full)
+    assert all(s == 0 for s in syndrome), (
+        f"LDPC syndrome should be all-zero for a valid codeword, "
+        f"got weight {sum(syndrome)}"
+    )
+    assert is_valid_codeword(full)
+    # Sanity: parity is NOT all-zero in general (it would be all-zero
+    # only for the trivial all-zero message).
+    parity = full[91:]
+    assert any(b == 1 for b in parity), (
+        "LDPC parity should be nonzero for a non-trivial message"
+    )
+
+
+def test_add_ldpc_parity_all_zero_message_produces_valid_codeword() -> None:
+    """All-zero systematic → all-zero parity → valid (trivial) codeword.
+
+    This is the silence degenerate case; the plugin explicitly skips
+    this case before decoding. But the encoder must produce a valid
+    LDPC codeword for it (the syndrome is trivially zero).
+    """
+    systematic = [0] * 91
+    full = add_ldpc_parity(systematic)
+    assert len(full) == 174
+    assert all(b == 0 for b in full)  # all-zero is trivially valid
+    assert is_valid_codeword(full)
+
+
+def test_syndrome_detects_single_bit_error() -> None:
+    """A single bit flip in a valid codeword produces a non-zero syndrome."""
+    bits = pack_message("K1ABC", "K2DEF", "KO51")
+    codeword = add_ldpc_parity(add_crc(bits))
+    assert is_valid_codeword(codeword)
+    # Flip a systematic bit.
+    cw_flipped = list(codeword)
+    cw_flipped[10] ^= 1
+    syndrome = compute_syndrome(cw_flipped)
+    assert sum(syndrome) > 0, "1-bit error must produce non-zero syndrome"
+    assert not is_valid_codeword(cw_flipped)
+    # Flip a parity bit.
+    cw_flipped2 = list(codeword)
+    cw_flipped2[100] ^= 1
+    syndrome2 = compute_syndrome(cw_flipped2)
+    assert sum(syndrome2) > 0
+
+
+def test_syndrome_rejects_garbage_decodes() -> None:
+    """Slice-28 v2: random bits almost surely fail the syndrome check.
+
+    This is the v2 improvement — eliminates the v1 false-positive
+    failure mode where random bits passed CRC at ~1/16384.
+    """
+    import random
+    random.seed(123)
+    n_trials = 100
+    n_pass = 0
+    for _ in range(n_trials):
+        # Random 174-bit codeword.
+        cw = [random.randint(0, 1) for _ in range(174)]
+        if is_valid_codeword(cw):
+            n_pass += 1
+    # Probability of a random 174-bit string being a valid codeword is
+    # ~1/2^83 = ~1e-25, so for 100 trials, n_pass should be exactly 0.
+    # (Allow 1 in case of astronomical luck; assert < 5%.)
+    assert n_pass == 0, (
+        f"{n_pass} of {n_trials} random codewords passed the syndrome check "
+        f"— expected 0 (LDPC syndrome rejects garbage)"
+    )
+
+
+def test_hard_decode_recovers_systematic_from_valid_codeword() -> None:
+    """hard_decode returns the 91 systematic bits iff the codeword is valid."""
+    bits = pack_message("K1ABC", "K2DEF", "KO51")
+    codeword = add_ldpc_parity(add_crc(bits))
+    sys_decoded = hard_decode(codeword)
+    assert sys_decoded is not None
+    assert len(sys_decoded) == 91
+    # The systematic bits are the first 91 of the codeword.
+    assert sys_decoded == codeword[:91]
+    # A bit-flipped codeword fails hard_decode.
+    cw_bad = list(codeword)
+    cw_bad[5] ^= 1
+    assert hard_decode(cw_bad) is None
+
+
+def test_sum_product_decoder_recovers_from_1_to_3_bit_errors() -> None:
+    """Slice-28 v2: sum-product LDPC decoder recovers 1-3 bit errors.
+
+    The decoder runs min-sum belief propagation on the H factor graph
+    and converges to the original codeword within max_iter iterations
+    when the number of bit errors is within the LDPC correction
+    capability (~3 bits for FT8's (174,91) code at high SNR).
+    """
+    import random
+    random.seed(456)
+    bits = pack_message("K1ABC", "KO51", "-12")
+    codeword = add_ldpc_parity(add_crc(bits))
+    # Convert codeword to soft LLRs (high-confidence hard decisions).
+    # Positive LLR = bit likely 0; negative LLR = bit likely 1.
+    for n_errors in (1, 2, 3):
+        cw_noisy = list(codeword)
+        err_positions = random.sample(range(174), n_errors)
+        for p in err_positions:
+            cw_noisy[p] ^= 1
+        soft_llrs = [(-30.0 if b == 1 else 30.0) for b in cw_noisy]
+        res = decode_ldpc(soft_llrs, max_iter=20)
+        assert res.converged, (
+            f"{n_errors}-bit error: BP should converge within 20 iters, "
+            f"got final_syndrome_weight={res.final_syndrome_weight}"
+        )
+        assert res.systematic_bits == codeword[:91], (
+            f"{n_errors}-bit error: decoded systematic bits should match the original"
+        )
+
+
+def test_sum_product_decoder_fails_above_correction_capability() -> None:
+    """Sum-product decoder does NOT converge when too many bits are flipped.
+
+    LDPC codes have a correction limit (~3-4 bits at high SNR for the
+    FT8 (174,91) code). Beyond that, the decoder either fails to
+    converge or converges to the wrong codeword. This test documents
+    that limit honestly.
+    """
+    import random
+    random.seed(789)
+    bits = pack_message("K1ABC", "KO51", "-12")
+    codeword = add_ldpc_parity(add_crc(bits))
+    n_errors = 8  # well above the ~3-bit limit
+    cw_noisy = list(codeword)
+    err_positions = random.sample(range(174), n_errors)
+    for p in err_positions:
+        cw_noisy[p] ^= 1
+    soft_llrs = [(-30.0 if b == 1 else 30.0) for b in cw_noisy]
+    res = decode_ldpc(soft_llrs, max_iter=20)
+    # The decoder should not converge (or should converge to the wrong
+    # codeword, in which case systematic_bits != original).
+    if res.converged:
+        # If it does converge, it shouldn't match the original (it
+        # would have converged to a different valid codeword).
+        assert res.systematic_bits != codeword[:91], (
+            "8-bit error converged to the original codeword — unexpected "
+            "(LDPC correction limit is ~3 bits)"
+        )
+    else:
+        # Non-convergence is the expected outcome.
+        assert res.final_syndrome_weight > 0
+
+
+def test_plugin_decode_slot_with_ldpc_wrapper() -> None:
+    """The plugin's decode_slot_with_ldpc static method wraps ft8_ldpc.decode_ldpc."""
+    bits = pack_message("K1ABC", "KO51", "-12")
+    codeword = add_ldpc_parity(add_crc(bits))
+    soft_llrs = [(-30.0 if b == 1 else 30.0) for b in codeword]
+    res = FT8DecoderPlugin.decode_slot_with_ldpc(soft_llrs, max_iter=20)
+    assert res.converged
+    assert res.systematic_bits == codeword[:91]
+
+
+def test_ldpc_module_constants() -> None:
+    """LDPC module exposes the expected dimensions."""
+    assert LDPC_PARITY_CHECKS == 83  # 174 - 91 systematic
 
 
 # ============================================================================
@@ -451,7 +635,8 @@ def test_snapshot_event_emitted_alongside_message() -> None:
 
 
 def test_status_reflects_decode_count_after_decodes() -> None:
-    """After decoding, status() reflects the new counts."""
+    """After decoding, status() reflects the new counts (v2: also reports
+    syndrome_failures)."""
     audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
     pcm = (audio * 32767).astype(np.int16)
     plugin = FT8DecoderPlugin()
@@ -461,10 +646,13 @@ def test_status_reflects_decode_count_after_decodes() -> None:
     assert s["slot_count"] >= 1
     # CRC failures may be 0 (the synthesized signal is clean).
     assert s["crc_failures"] >= 0
+    # v2: syndrome_failures counter exists (will be 0 for a clean signal;
+    # would be >0 if fed garbage that failed the LDPC syndrome check).
+    assert s["syndrome_failures"] >= 0
 
 
 def test_stop_resets_state() -> None:
-    """stop() clears all streaming state."""
+    """stop() clears all streaming state (v2: includes syndrome_failures)."""
     audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
     pcm = (audio * 32767).astype(np.int16)
     plugin = FT8DecoderPlugin()
@@ -474,3 +662,4 @@ def test_stop_resets_state() -> None:
     assert s["messages_decoded"] == 0
     assert s["slot_count"] == 0
     assert s["crc_failures"] == 0
+    assert s["syndrome_failures"] == 0
