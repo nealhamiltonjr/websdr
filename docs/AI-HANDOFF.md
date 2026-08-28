@@ -151,7 +151,7 @@ regeneration — proven by checksum, see §7.2).
 ## 4. Where we are — verified status
 
 Every number below was re-verified at snapshot time (2026-08-28, post
-slice-31, origin/main `<pending slice-31 commit>`):
+slice-31, origin/main `eefd5c5`):
 
 | Gate | Result |
 |---|---|
@@ -162,7 +162,7 @@ slice-31, origin/main `<pending slice-31 commit>`):
 | Web `vitest` | **178/178 pass** across 14 test files (~3 s) |
 | Web `tsc --noEmit` | clean |
 | `vite build` | clean (one chunk-size warning, not an error) |
-| GitHub Actions CI (run `33142493511` for `aa18de0` = slice-30) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types. (Slice-31 CI run pending at write time.) |
+| GitHub Actions CI (run `33143249664` for `eefd5c5` = slice-31) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types |
 
 **What works end-to-end today, hardware-free:**
 
@@ -254,7 +254,7 @@ slice-31, origin/main `<pending slice-31 commit>`):
 
 | Slice | Title | Sync commit |
 |---|---|---|
-| 31 | dump1090 fixture improvements: fork auto-detect + SBS1 auto-discovery + new failure modes | `<pending>` |
+| 31 | dump1090 fixture improvements: fork auto-detect + SBS1 auto-discovery + new failure modes | `eefd5c5` |
 | 30 | docs refresh: AI-HANDOFF.md + STATUS.md to actual state; PAT-strip push of slices 27/28/29 | `aa18de0` |
 | 29 | FT8 v2.1 — wire soft FSK demod → sum-product LDPC as primary decode path | `fd7c98c` |
 | 28 | FT8 v2 LDPC — real parity + syndrome check + sum-product decoder | `1b4daba` |
