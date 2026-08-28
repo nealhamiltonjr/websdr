@@ -1,6 +1,6 @@
 # OpenWebRX+ — Complete Project Handoff (for an AI continuing this work)
 
-**Snapshot date:** 2026-08-29 · **State:** post slice-32 (federation polish: secondary-demod forwarding via `RemoteDecoderEvent` wire type 0x05) · **All quality gates green** (528 server tests + 178 web tests; CI run `33144017200` for commit `4260524` — all 5 jobs success; one known `mypy --strict` CLI artifact documented in §4/§5.1, NOT a CI failure)
+**Snapshot date:** 2026-08-29 · **State:** post slice-35 (SDRangel audio-over-UDP-sink + real `set_mode()` — closes the slice-25 "spectrum-only v1" limitation) · **All quality gates green** (538 server tests + 178 web tests; one known `mypy --strict` CLI artifact documented in §4/§5.1, NOT a CI failure)
 
 This document is the single entry point for an AI (or human) picking this
 project up cold. It explains what the project is, the tech stack, exactly
@@ -388,30 +388,56 @@ Tests: `apps/web/src/lib/denoise/RNNoiseLoader.test.ts` (8 tests)
 covers the loader contract. The worklet itself is a small adapter —
 contract-tested indirectly via vitest's mock AudioContext.
 
-### 5.4 SDRangel REST+WS streaming — ✅ v1 SHIPPED (slice-25, commit `b8b1d04` + ruff fix `29ee618`)
+### 5.4 SDRangel REST+WS streaming — ✅ v1 SHIPPED (slice-25, commit `b8b1d04` + ruff fix `29ee618`) + ✅ v2 audio + set_mode() SHIPPED (slice-35)
 
-Slice-25 closes the slice-20 manifest scaffold with v1 spectrum-only
-streaming. The implementation plan (originally documented in the
-`sources/sdrangel.py` module docstring) is now partially live:
+Slice-25 closed the slice-20 manifest scaffold with v1 spectrum-only
+streaming. Slice-35 closed the v1 "spectrum-only / set_mode() raises"
+limitation with audio-over-UDP-sink + a real `set_mode()`:
 
 1. `GET /deviceset/{device_set}/device` — discover the current
-   device. ✅
+   device. ✅ (slice-25)
 2. `PUT /deviceset/{device_set}/device/settings` — set center
-   frequency. ✅
+   frequency. ✅ (slice-25)
 3. Open the spectrum-server WebSocket: `ws://host:port/spectrum/
    deviceset/{device_set}` — binary FFT frames in a documented
-   layout. ✅ — frames decoded into `RemoteSecondaryFftFrame` and
-   forwarded to the receiver session's secondary FFT channel.
-4. Audio-over-WS — **still deferred**. SDRangel has no built-in
-   audio-over-WS; v1 ships spectrum-only. Audio will require either
-   UDP-sink → python audio pump → `RemoteAudioFrame` translation,
-   or a future SDRangel feature. Not blocking.
+   layout. ✅ (slice-25) — frames decoded into `RemoteFftFrame` and
+   forwarded to the receiver session's FFT channel.
+4. Audio-over-UDP-sink — ✅ SHIPPED (slice-35). SDRangel has no
+   built-in audio-over-WS, so the v2 path configures a demod
+   channel's **UDP audio sink** to stream int16 mono PCM to a local
+   UDP listener. `SDRangelSource` gains `audio_enabled` /
+   `audio_output_rate` (8/12/24/48 kS/s) / `audio_mode` (NFM/WFM/AM/
+   USB/LSB/CW) / `audio_udp_port` (0=ephemeral) params. When audio
+   is enabled, `display_stream()`:
+     (a) binds a local UDP socket,
+     (b) POSTs `/deviceset/{id}/channel` to add a demod channel,
+     (c) PUTs `/deviceset/{id}/channel/{cid}/settings` with
+         `<channelType>Settings` body containing `udpEnabled=true`,
+         `udpAddress=127.0.0.1`, `udpPort=<local>`, `audioSampleRate`,
+     (d) reads int16 PCM from the UDP socket in a background task,
+     (e) yields interleaved `RemoteAudioFrame` chunks alongside the
+         FFT frames (drained between WS reads).
+   `_teardown_audio()` cancels the listener, closes the socket, and
+   DELETEs the remote channel.
+5. `set_mode(mode)` — ✅ SHIPPED (slice-35). Was `NotImplementedError`
+   in v1; now DELETEs the current channel + POSTs a new one with the
+   requested mode + PUTs its settings to re-point the UDP sink. SSB
+   mode correctly codes `sidebands=1` (USB) / `sidebands=0` (LSB).
+   On a spectrum-only source (`audio_enabled=False`), `set_mode()`
+   just tracks the mode (no REST calls) — honest no-op, not an error.
 
 Pattern: copied `sources/spyserver.py` (TCP) for the REST polling
 skeleton + `sources/kiwi.py` (WS) for the spectrum-server WS handling.
-Tests: `apps/server/tests/test_openwebrx_remote_driver.py` and
-`apps/server/tests/test_sdrangel_driver.py` — both green under the
-hardware-free fake fixtures pattern.
+Slice-35 added the channel-management REST routes (POST/PUT/DELETE) +
+the UDP listener (modeled on `sources/_hw_common.py`'s `AsyncIqBridge`
+for the cross-thread handoff pattern, but simpler — UDP recv is already
+non-blocking).
+Tests: `apps/server/tests/test_sdrangel_driver.py` — 35 tests total
+(25 slice-20/25 + 10 slice-35), all green under the hardware-free
+fake fixtures pattern. `FakeSDRangelServer` extended with channel
+POST/PUT/DELETE handlers + a `start_audio_sender` method that opens a
+UDP socket to the source's local listener port and streams 4 chunks of
+int16 mono PCM (1 kHz tone, 800 samples/chunk).
 
 ### 5.5 DeepFilterNet weights + upstream crate (closes slice-18 scaffold)
 

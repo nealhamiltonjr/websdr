@@ -578,7 +578,7 @@ _BUILTIN_SOURCES: list[_BuiltinManifest] = [
     ),
     _BuiltinManifest(
         source_type="sdrangel",
-        label="SDRangel (remote, REST+WS — manifest only)",
+        label="SDRangel (remote, REST+WS)",
         sdk="SDRangel REST API v7+",
         hardware_required=False,  # the SDR is on the other end of the REST API
         default_sample_rate=2_400_000,
@@ -590,15 +590,15 @@ _BUILTIN_SOURCES: list[_BuiltinManifest] = [
         agc=True,
         entrypoint="openwebrx_plus.sources.sdrangel:SDRangelSource",
         description=(
-            "Slice-20 manifest scaffold: a remote SDRangel instance "
-            "controlled via its REST + WebSocket API (ADR-006 Tier C). "
-            "Registered so the UI can advertise SDRangel support; the "
-            "REST+WS streaming path raises NotImplementedError today "
-            "and lands in a future slice. Operators who want SDRangel "
-            "now can run a local instance and connect via its own web "
-            "UI. See openwebrx_plus/sources/sdrangel.py module docstring "
-            "for the implementation plan (device discovery → center "
-            "freq set → spectrum server WS → RemoteFftFrame)."
+            "A remote SDRangel instance controlled via its REST + "
+            "WebSocket API (ADR-006 Tier C). Slice-25 shipped v1 "
+            "REST+WS spectrum streaming; slice-35 added audio-over-"
+            "UDP-sink (configures a demod channel's UDP sink to "
+            "stream int16 mono PCM to a local listener) + a real "
+            "set_mode() that swaps the demod channel via POST+PUT+"
+            "DELETE. See openwebrx_plus/sources/sdrangel.py module "
+            "docstring for the wire-fact details and first-live-"
+            "bring-up verification checklist."
         ),
     ),
 ]

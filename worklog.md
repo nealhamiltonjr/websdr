@@ -1249,3 +1249,81 @@ Stage Summary:
 - Critical hygiene fix: ran `git reflog expire --expire-unreachable=now --all && git gc --prune=now --aggressive` to evict the 184 MB unreachable blob (from a prior session's accidental commit) from `.git/objects/`. .git shrank 309 MB → 1.3 MB. The repo is now properly sized — the prior 176 MB ZIP was itself bloated because that blob was still loose in .git/objects when the prior ZIP was built.
 - No new slice work in this task — only docs refresh + zip regen + repo hygiene. All slice 1-32 work was already committed and pushed in prior sessions; CI is green (run 33144017200 for 4260524 = slice-32).
 - Local-only commit pending push: this slice-33 commit (docs refresh + worklog append). No fresh GitHub PAT was provided in this session; the commit lives locally until the user provides one for the next sync-up.
+
+---
+Task ID: 34
+Agent: super-z (main agent)
+Task: End-to-end codebase validation + fix bootstrap-venv.sh missing tomli_w (slice-27 drift).
+
+Work Log:
+- User asked to validate the entire codebase end-to-end: confirm every claimed slice's code is actually present, run all quality gates, fix any bugs, and complete e2e testing/simulations.
+- Bootstrapped the dev environment from scratch via scripts/bootstrap-venv.sh:
+  * Installed pnpm@9 globally (npm install -g pnpm@9).
+  * Installed cmake via pip (/home/z/.venv/bin/python -m pip install cmake → cmake 4.4.2) because bootstrap-venv.sh requires cmake and it wasn't on PATH.
+  * Ran scripts/bootstrap-venv.sh with PATH including the user venv. Built libcsdr from jketterl/csdr.git (with the SAMPLERATE/FFTW3 include-dirs sed patch), built pycsdr from jketterl/pycsdr.git against it (--no-build-isolation --no-deps), baked all 4 IQ fixtures via scripts/generate_iq_fixtures.py.
+  * Had to install pip + setuptools + wheel into the venv first (uv venv doesn't include them by default).
+- Dispatched a strict presence-verification agent (Task ID: 5, Agent: Explore) that checked file:line locations for all 8 high-value slice claims (AI_DSP_MODES_AVAILABLE=True, deepfilternet.rs >500 lines, SECONDARY_FFT_HEADER_MAGIC in both Python+TS, rnnoise-processor.js + AudioPlayer.enableClientDenoise, SDRangel REST+WS, FT8 stack, dump1090 auto-discovery, RemoteDecoderEvent wire type 0x05). All 32 slices VERIFIED present with substantive code.
+- Ran all quality gates:
+  * Server tests via scripts/run-server-tests.sh: **528 passed, 1 skipped** (matches slice-32 expected count exactly).
+  * Web tests via pnpm exec vitest run: **178 passed**.
+  * Server ruff: clean. Server mypy strict: "Success: no issues found in 60 source files".
+  * Web tsc --noEmit: clean. Web eslint: clean. Web vite build: succeeds in 5.78s.
+- Found ONE real bug: scripts/bootstrap-venv.sh step 4 hardcoded dep list was missing `tomli_w`. Slice-27 added tomli_w>=1.0.0 to pyproject.toml/uv.lock (needed by UserSettingsService._save_sync() to persist settings to TOML), but the bootstrap script's hardcoded list wasn't updated. A fresh bootstrap produced 12 test failures (test_user_settings.py + test_settings_debug_*.py + test_full_app_e2e.py) all with ModuleNotFoundError: No module named 'tomli_w'. CI didn't catch this because the server job runs `uv sync --frozen` which reads pyproject.toml directly.
+- Fixed: added `tomli_w` to the uv pip install line in bootstrap-venv.sh step 4 (1-line fix).
+- Wrote /home/z/my-project/scripts/e2e_smoke.sh — a live end-to-end smoke harness that boots the real server, hits every REST endpoint, opens a real WebSocket, confirms FFT+audio+metadata frames flow, spawns a file-source ADS-B receiver + attaches the adsb decoder, and confirms decoder events flow (decoded ICAO 3C70EE = "N42OWRX" from the baked adsb_1090.cf32 fixture).
+- Bug in my e2e script (not the codebase): used `preset` kwarg for SimulatedSource (actual kwarg is `signal_set`) and used `b"AUDI"` for the audio magic (actual on-wire bytes are `b"IDUA"` because the u32 0x41554449 reads LE as I-D-U-A; the magic VALUE is "AUDI" but the BYTES are reversed). Fixed both.
+- Committed as `slice-34: fix bootstrap-venv.sh missing tomli_w (slice-27 drift)` (commit cdae430).
+- Pushed via PAT-strip inline-URL pattern (https://x-access-token:${PAT}@github.com/...git main:main, unset PAT immediately after). Push succeeded: 3c3d29a..cdae430 main -> main. Reset remote URL to clean HTTPS afterwards.
+- Verified origin/main matches local HEAD.
+
+Stage Summary:
+- The project is fully intact: every slice (1-32) has its claimed code present with substantive content. All quality gates pass: 528+1 server tests, 178 web tests, ruff/mypy/tsc/eslint clean, vite build succeeds.
+- One real bug found and fixed: bootstrap-venv.sh missing tomli_w (slice-27 drift). Fix committed as slice-34 (cdae430) and pushed to origin/main.
+- Live E2E smoke harness at /home/z/my-project/scripts/e2e_smoke.sh confirms the full stack works: server boots, REST endpoints respond, WS FFT+audio+metadata frames flow, file-source ADS-B receiver + adsb decoder produces decoder events.
+- Ready to start slice-35.
+
+---
+Task ID: 35
+Agent: super-z (main agent)
+Task: Slice-35 — SDRangel audio-over-UDP-sink + real set_mode(). Closes the slice-25 "spectrum-only v1" limitation.
+
+Work Log:
+- Read apps/server/openwebrx_plus/sources/sdrangel.py (slice-25 v1, 478 lines) to understand current state: REST probe + device PUT + spectrum WS streaming + RemoteFftFrame yielding. set_mode() raises NotImplementedError. Audio deferred ("SDRangel has no built-in audio-over-WS; needs UDP-sink → RemoteAudioFrame translation").
+- Read apps/server/tests/test_sdrangel_driver.py (25 tests, slice-20/25) to understand the FakeSDRangelServer pattern: ASGI REST app + websockets.serve on ephemeral port. CI never talks to live receivers.
+- Read apps/server/openwebrx_plus/sources/base.py:230 — RemoteAudioFrame dataclass (pcm: np.ndarray int16 mono, sample_rate: int). Already handled by ReceiverSession._run_display (line 734) which repacks into the AUDI wire format. So all I need to do is make SDRangelSource.display_stream() yield RemoteAudioFrame chunks.
+- Design decision: SDRangel has no audio-over-WS, but its demod channels (NFM/WFM/AM/SSB/CW) support a UDP audio sink — when enabled, the channel streams int16 mono PCM at the configured sample rate to a UDP destination. Slice-35 wires this up: open a local UDP socket, POST a channel add, PUT its settings to configure the UDP sink, read PCM in a background task.
+- Implementation (apps/server/openwebrx_plus/sources/sdrangel.py, now ~810 lines):
+  * Added 4 new params: audio_enabled (bool, default False), audio_output_rate (8/12/24/48 kS/s, default 8000), audio_mode (NFM/WFM/AM/USB/LSB/CW, default NFM), audio_udp_port (0=ephemeral, default 0).
+  * Added _SDR_CHANNEL_TYPES mapping: USB/LSB→SSB (with sidebands field), AM→AM, NFM/FM→NFM, WFM/WBFM→WFM, CW→CW. SSB sideband codes: _SSB_LSB=0, _SSB_USB=1.
+  * Added _setup_audio() — binds UDP socket, spawns _audio_listen_task, calls _add_channel + _put_channel_settings, sets _audio_ready event.
+  * Added _add_channel() — POST /deviceset/{id}/channel with {channelType, direction:0}; parses channelIndex from response (accepts channelIndex or index).
+  * Added _put_channel_settings() — PUT /deviceset/{id}/channel/{cid}/settings with {<channelType>Settings: {audioSampleRate, udpAddress, udpPort, udpEnabled, [sidebands for SSB]}}.
+  * Added _delete_channel() — DELETE /deviceset/{id}/channel/{cid}.
+  * Added _audio_listen_loop() — background task reading int16 PCM from UDP socket via loop.sock_recv; drop-oldest queue overflow policy (matching IqHub pattern).
+  * Added _drain_audio() — async generator yielding RemoteAudioFrame chunks from the queue (non-blocking, called between WS reads).
+  * Added _teardown_audio() — cancels listener task, closes socket, DELETEs remote channel (best-effort).
+  * Updated display_stream() — calls _setup_audio() between REST probe and WS connect; yields interleaved RemoteAudioFrame chunks via _drain_audio() between WS frames; calls _teardown_audio() in finally block.
+  * De-stubbed set_mode() — DELETEs old channel + POSTs new + PUTs settings. SSB sidebands correctly coded. On spectrum-only source (audio_enabled=False), just tracks the mode (honest no-op, not an error). Before streaming starts, just tracks the mode for the upcoming _setup_audio call.
+- Updated apps/server/openwebrx_plus/sources/base.py manifest: label "SDRangel (remote, REST+WS — manifest only)" → "SDRangel (remote, REST+WS)"; description updated to mention slice-25 v1 + slice-35 audio + real set_mode().
+- Extended apps/server/tests/test_sdrangel_driver.py:
+  * FakeSDRangelServer: added channel POST/PUT/DELETE handlers in the ASGI app; added received_channel_posts/received_channel_puts/received_channel_deletes tracking lists; added start_audio_sender(dest_port, sample_rate) method that opens a UDP socket and streams 4 chunks of 800-sample int16 mono PCM (1 kHz tone).
+  * Replaced test_set_mode_raises_not_implemented with test_set_mode_no_audio_just_tracks (slice-35 de-stubbed set_mode; the old NotImplementedError path is gone).
+  * Added 10 new tests: constructor validates audio_output_rate / audio_mode; constructor accepts audio params; set_mode on spectrum-only source just tracks; set_mode rejects unsupported mode; _setup_audio POSTs channel + PUTs UDP sink settings; display_stream yields interleaved RemoteAudioFrame chunks; set_mode while streaming swaps channel (DELETE+POST+PUT); SSB sideband codes (USB=1, LSB=0); _teardown_audio DELETEs the remote channel.
+- First test run: 34 pass, 1 fail (AttributeError: 'SDRangelSource' object has no attribute '_audio_local_port' — the attribute was only assigned inside _setup_audio, not in __post_init__).
+- Fix: added self._audio_local_port: int | None = None + self._audio_ready: asyncio.Event = asyncio.Event() to __post_init__. Updated _setup_audio to set _audio_ready.set() after the channel add completes. Updated _teardown_audio to clear it. Updated all tests to await source._audio_ready.wait() instead of polling (more reliable than sleep-based polling, especially under CI load).
+- Second test run: 35 pass, 0 fail. But ruff found 2 SIM105 errors (try/except/pass should be contextlib.suppress). Fixed both.
+- Also fixed a typo in the set_mode log message ("sdranel" → "sdrangel").
+- Final quality gates:
+  * Server tests: **538 passed, 1 skipped** (was 528+1; +10 new sdrangel tests).
+  * Server ruff: clean. Server mypy strict: "Success: no issues found in 60 source files".
+  * Web tests: **178 passed**. Web tsc: clean. Web eslint: clean. Web vite build: succeeds in 5.33s.
+- Live E2E smoke (/home/z/my-project/scripts/e2e_smoke.sh): server boots, REST endpoints respond (12 sources, 4 fixtures, 6 decoders, 1 receiver default, /api/listing 404 = privacy default), WS FFT+audio+metadata frames flow (5 FFT + 284 audio + 288 metadata in ~3s), file-source ADS-B receiver + adsb decoder produces decoder events (ICAO 3C70EE decoded). SDRangel manifest label now shows "SDRangel (remote, REST+WS)" (was "manifest only"). No regressions.
+- Updated docs:
+  * docs/STATUS.md: header → "post slice-35"; addendum extended with slice-34 (bootstrap-fix) + slice-35 (SDRangel audio) detail blocks; health table server tests 528 → 538; TL;DR updated to mention "full SDRangel federation"; "Federation polish" mid-term bullet updated to reflect slice-35 shipped.
+  * docs/AI-HANDOFF.md: §1 header → "post slice-35 (SDRangel audio-over-UDP-sink + real set_mode())"; §5.4 fully rewritten to document the v2 audio path + real set_mode() + 35 total tests.
+
+Stage Summary:
+- Slice-35 closes the slice-25 "spectrum-only v1" limitation. SDRangelSource now supports audio-over-UDP-sink: when audio_enabled=True, display_stream() opens a local UDP socket, POSTs a demod channel (NFM/WFM/AM/USB/LSB/CW), PUTs its settings to configure the UDP sink to stream int16 mono PCM to our local port, and yields interleaved RemoteAudioFrame chunks alongside the FFT frames. set_mode() is now real (DELETE+POST+PUT channel swap) instead of raising NotImplementedError.
+- 10 new tests, all green. Total server test count: 528 → 538 (+1 skipped unchanged). All static gates clean. Live E2E smoke confirms no regressions.
+- The SDRangel federation client is now feature-complete (spectrum + audio + mode switching). The only remaining SDRangel work is first-live-receiver wire-literal verification (the in-repo FakeSDRangelServer codifies the expected protocol; if a real SDRangel differs, adjust the _* constants in sources/sdrangel.py).
+- Ready to commit + push as slice-35.
