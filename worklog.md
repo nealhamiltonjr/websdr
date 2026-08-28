@@ -1367,3 +1367,23 @@ Stage Summary:
 - Decoder count: 8 → 10 (added SSTV + Olivia; RTTY + PSK31 were slices 38-39).
 - The frontend now has type-safe decoder family classification for all 10 decoders.
 - All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
+
+---
+Task ID: 43-45
+Agent: super-z (main agent)
+Task: Three-slice autonomous sprint — WSPR decoder, TextStreamViz frontend component, AX.25 packet decoder.
+
+Work Log:
+- Slice 43: WSPR decoder — wspr_demod.py (4-tone FSK Goertzel at 1.4648 Hz spacing, 162-symbol transmissions), wspr_protocol.py (callsign 28-bit base-36 + grid 15-bit + power 7-bit pack/unpack), wspr.py (plugin emitting spot/progress events). 18 new tests. Fixed grid unpacking bug (division order was wrong). Server tests: 615 → 633.
+- Slice 44: Frontend TextStreamViz — textStreamModel.ts (pure-logic model with applyDecoderEvent, formatTime, formatAge, truncateText), TextStreamViz.tsx (SolidJS component with scrolling monospace text panel, green terminal styling, decoder name badge, char count, timestamp). 15 new web tests. Web tests: 195 → 210.
+- Slice 45: AX.25 packet decoder — ax25_demod.py (1200 baud AFSK demod with Goertzel mark/space + NRZI decode + HDLC frame sync + bit de-stuffing + CRC-16-CCITT), ax25_protocol.py (7-byte callsign encoding + digipeater chain + frame type I/S/U classification + full encode/decode), ax25.py (plugin emitting packet/crc_error events). 18 new tests. Fixed bit stuffing in test synthesis. Server tests: 633 → 651.
+- Each slice: ran full quality gates (server tests, ruff, mypy strict, web tests, tsc, eslint, vite build), ran E2E smoke, committed, pushed via PAT-strip pattern, verified sync.
+- All slices pushed to origin/main: e2d88e0 (slice-43) → 5ff3871 (slice-44) → f85a1ac (slice-45).
+
+Stage Summary:
+- Three slices shipped: WSPR decoder (slice-43), TextStreamViz (slice-44), AX.25 packet decoder (slice-45).
+- Server test count: 615 → 651 (+36 new tests).
+- Web test count: 195 → 210 (+15 new tests).
+- Decoder count: 10 → 12 (added WSPR + AX.25).
+- Frontend viz count: 9 → 10 (added TextStreamViz).
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
