@@ -228,6 +228,109 @@ class TestIqFormatConversion:
 
 
 # ---------------------------------------------------------------------------
+# Fork auto-detection (slice-31): _probe_fork + _resolve_fork
+# ---------------------------------------------------------------------------
+
+
+class _FakeVersionBinary:
+    """Tiny shim that writes a fixed string to stdout when invoked with
+    any argument starting with ``--`` (so ``--version`` and ``-V`` both
+    work). Implemented as a temp file because the bridge's _probe_fork
+    runs subprocess.run([binary, arg]) — needs a real executable.
+
+    Usage in a test:
+
+        with _FakeVersionBinary("dump1090-fa v1.0-1") as binpath:
+            assert m._probe_fork(binpath) == "fa"
+    """
+
+    def __init__(self, version_output: str) -> None:
+        self._out = version_output
+        self._path: Path | None = None
+
+    def __enter__(self) -> str:
+        import tempfile
+
+        # Write a tiny shell script that echoes the canned output. The
+        # shell is portable across Linux/macOS; this is a test-only path.
+        script = f'#!/bin/sh\necho "{self._out}"\n'
+        fd, path = tempfile.mkstemp(suffix=".sh", prefix="fake-dump1090-")
+        import os
+
+        with os.fdopen(fd, "w") as f:
+            f.write(script)
+        os.chmod(path, 0o755)
+        self._path = Path(path)
+        return str(self._path)
+
+    def __exit__(self, *_: object) -> None:
+        if self._path is not None:
+            with contextlib.suppress(OSError):
+                self._path.unlink()
+
+
+class TestForkAutoDetect:
+    """Tests for the dump1090-fork auto-detection probe (slice-31)."""
+
+    def test_probe_returns_fa_for_dump1090_fa_signature(self) -> None:
+        with _FakeVersionBinary("dump1090-fa v1.0-1 (rbbranch)") as p:
+            assert m._probe_fork(p) == "fa"
+
+    def test_probe_returns_fa_for_bare_dump1090_version(self) -> None:
+        # Some fa builds print just "dump1090 1.0.x" without the -fa suffix.
+        with _FakeVersionBinary("dump1090 1.0.8-1") as p:
+            assert m._probe_fork(p) == "fa"
+
+    def test_probe_returns_mutability_for_mutability_signature(self) -> None:
+        with _FakeVersionBinary("dump1090-mutability v1.15dev") as p:
+            assert m._probe_fork(p) == "mutability"
+
+    def test_probe_returns_readsb_for_readsb_signature(self) -> None:
+        with _FakeVersionBinary("readsb 2.0 proto") as p:
+            assert m._probe_fork(p) == "readsb"
+
+    def test_probe_returns_none_for_unrecognized_output(self) -> None:
+        with _FakeVersionBinary("hello world this is not dump1090") as p:
+            assert m._probe_fork(p) is None
+
+    def test_probe_returns_none_for_missing_binary(self) -> None:
+        # A binary path that doesn't exist; probe must not raise.
+        assert m._probe_fork("/nonexistent/dump1090-binary-xyz") is None
+
+    def test_resolve_fork_honors_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Override skips the probe entirely.
+        monkeypatch.setenv("OPENWEBRX_PLUS_DUMP1090_FORK", "mutability")
+        # Re-import the module-level _FORK_OVERRIDE by reloading — the
+        # module reads it at import time. Simpler: call _resolve_fork
+        # and assert it honors the live monkeypatched env. Because
+        # _resolve_fork reads _FORK_OVERRIDE at module level, we patch
+        # the module attribute directly.
+        monkeypatch.setattr(m, "_FORK_OVERRIDE", "mutability")
+        assert m._resolve_fork() == "mutability"
+
+    def test_resolve_fork_returns_unknown_when_probe_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No override + probe returns None → "unknown" (never None).
+        monkeypatch.setattr(m, "_FORK_OVERRIDE", "")
+        monkeypatch.setattr(m, "_REAL_BIN", "/nonexistent/dump1090-binary-xyz")
+        assert m._resolve_fork() == "unknown"
+
+    def test_resolve_fork_warns_on_invalid_override(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # An invalid override value falls back to "unknown" and writes a
+        # warning to stderr; the operator knows the override was bad.
+        monkeypatch.setattr(m, "_FORK_OVERRIDE", "custom-fork-name")
+        monkeypatch.setattr(m, "_REAL_BIN", "/nonexistent")
+        result = m._resolve_fork()
+        assert result == "unknown"
+        captured = capsys.readouterr()
+        assert "OPENWEBRX_PLUS_DUMP1090_FORK" in captured.err
+        assert "custom-fork-name" in captured.err
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: bridge ↔ fake SBS1 server (no real dump1090 binary needed)
 # ---------------------------------------------------------------------------
 
@@ -363,6 +466,13 @@ class TestBridgeEndToEnd:
                 assert ready["software"] == "sbs1-bridge/1.0"
                 assert ready["receiver_id"] == "rx-test"
                 assert ready["sbs_port"] == server.port
+                # Slice-31: ready event must carry a fork field (even if
+                # "unknown" — the probe runs against _REAL_BIN which
+                # defaults to "dump1090"; in this --no-spawn test path
+                # the probe likely returns None since there's no real
+                # binary in CI, but the field MUST exist).
+                assert "fork" in ready
+                assert ready["fork"] in {"fa", "mutability", "readsb", "unknown"}
 
                 frame_events = [e for e in events if e.get("kind") == "frame"]
                 icaos = {e.get("icao") for e in frame_events}

@@ -111,6 +111,30 @@ def main() -> None:
                         help="sleep before reading any stdin (backpressure tests)")
     parser.add_argument("--echo-stats", action="store_true",
                         help="emit iq_stats events instead of demodulating")
+    # Slice-31: two new failure modes for the runner's crash/vanish/
+    # partial-JSON recovery paths.
+    parser.add_argument(
+        "--vanish-after-ready-secs",
+        type=float,
+        default=0.0,
+        help=(
+            "emit ready, sleep N seconds, then close stdout WITHOUT "
+            "exiting (mid-handshake EOF — tests the runner's "
+            "'decoder emitted ready then vanished' path; the runner "
+            "must treat the closed stdout as attach failure after "
+            "ready_timeout, not as graceful stop)"
+        ),
+    )
+    parser.add_argument(
+        "--emit-partial-json-die",
+        action="store_true",
+        help=(
+            "after the ready line, write a truncated JSON object "
+            "(missing closing brace + trailing comma) then close "
+            "stdout and exit 0 — tests the runner's JSON parser "
+            "recovery (must not crash; must log the line and skip)"
+        ),
+    )
     args = parser.parse_args()
 
     fmt = os.environ.get("OWRX_IQ_FORMAT", "cs16")
@@ -136,6 +160,44 @@ def main() -> None:
     })
     for _ in range(args.garbage_lines):
         print("warning: this line is deliberately not JSON", flush=True)
+
+    # Slice-31 failure mode: emit a truncated JSON line then close
+    # stdout and exit. The runner's JSON parser must not crash on the
+    # malformed line — it must log + skip and (because the process
+    # exits 0) treat it as a graceful stop.
+    if args.emit_partial_json_die:
+        # Write the partial JSON directly to stdout (bypassing the emit
+        # helper which would try to json.dumps it again).
+        sys.stdout.write(
+            '{"kind": "frame", "icao": "ABC123", "raw": "'
+            "this line is deliberately truncated"
+            ",,,"
+        )
+        sys.stdout.flush()
+        # Close stdout so the runner sees EOF on the decoder's event
+        # stream; exit 0 so the runner doesn't treat it as a crash.
+        sys.stdout.close()
+        sys.exit(0)
+
+    # Slice-31 failure mode: emit ready, sleep, then close stdout WITHOUT
+    # exiting the process. This distinguishes from --stall-secs (which
+    # stalls BEFORE ready) and from --crash-after (which exits nonzero).
+    # The runner must treat the closed stdout as "decoder vanished after
+    # ready" — a recoverable attach failure that triggers restart.
+    if args.vanish_after_ready_secs > 0:
+        time.sleep(args.vanish_after_ready_secs)
+        # Close stdout — the runner's stdout reader sees EOF, then calls
+        # await proc.wait() which blocks until the process exits. We
+        # exit immediately so the test completes quickly. The runner's
+        # stdin pump will see EPIPE on its next write (the child's stdin
+        # fd is closed when Python exits) and break out cleanly.
+        sys.stdout.close()
+        # Brief yield so the runner's stdout reader wakes up before the
+        # process exits; this avoids a race where the runner reads the
+        # closed-pipe EOF after process exit (which would also work but
+        # is racy on slow CI machines).
+        time.sleep(0.1)
+        return
 
     rx = ModeSReceiver()
     aircraft: dict[str, dict[str, object]] = {}

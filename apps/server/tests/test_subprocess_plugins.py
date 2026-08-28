@@ -532,3 +532,105 @@ def test_destroy_receiver_reaps_subprocess(
     rid = _spawn_adsb_receiver(client)
     assert client.post(f"/api/receivers/{rid}/decoders", json={"name": "dump1090"}).status_code == 201
     assert client.delete(f"/api/receivers/{rid}").status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Slice-31 failure modes: vanish-after-ready, partial-JSON-die
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_vanish_after_ready_triggers_restart_then_failure() -> None:
+    """Fake emits ready, closes stdout without exiting, then exits 0.
+
+    The runner must:
+      * accept the ready event (handshake completes)
+      * notice stdout EOF on the next pump cycle
+      * treat the unexpected exit (rc=0 but _stopping is False) as a
+        crash → respawn via restart_backoff
+      * after the restart budget is exhausted, declare state="failed"
+    """
+    # restart_backoff=(0.05,) → 1 restart allowed. After the respawned
+    # child also vanishes, the runner declares failure.
+    plugin = _plugin(
+        "--vanish-after-ready-secs", "0.1",
+        restart_backoff=(0.05,),
+    )
+    try:
+        await plugin.on_attach(CTX)
+        first_ready = plugin._runner.ready_payload  # noqa: SLF001
+        assert first_ready is not None
+        assert first_ready["software"] == "fake-dump1090/1.0"
+
+        # Drain events until the runner declares failure. Budget ~5s
+        # for the vanish + 0.05s backoff + second vanish + state change.
+        events: list[dict[str, Any]] = []
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            events.extend(plugin.feed_iq(_EMPTY))
+            st = plugin.status()
+            if st["state"] == "failed":
+                break
+            await asyncio.sleep(0.05)
+
+        final_status = plugin.status()
+        assert final_status["state"] == "failed"
+        # At least one restart attempt was made.
+        assert final_status["restarts"] >= 1
+        # At least one decoder_state event with state="failed" surfaced.
+        failed_events = [
+            e for e in events
+            if e.get("kind") == "decoder_state" and e.get("state") == "failed"
+        ]
+        assert failed_events, "expected a failed decoder_state event"
+    finally:
+        await plugin.astop()
+
+
+@pytest.mark.asyncio
+async def test_emit_partial_json_die_counts_parse_error_then_fails() -> None:
+    """Fake emits ready, writes a truncated JSON line, then exits 0.
+
+    The runner must:
+      * accept the ready event (handshake completes)
+      * try to parse the partial JSON line, fail, count it as a
+        parse_error (NOT crash)
+      * notice stdout EOF on the next pump cycle
+      * treat the unexpected exit (rc=0 but _stopping is False) as a
+        crash → respawn via restart_backoff
+      * after the restart budget is exhausted, declare state="failed"
+    """
+    plugin = _plugin(
+        "--emit-partial-json-die",
+        restart_backoff=(0.05,),
+    )
+    try:
+        await plugin.on_attach(CTX)
+        first_ready = plugin._runner.ready_payload  # noqa: SLF001
+        assert first_ready is not None
+        assert first_ready["software"] == "fake-dump1090/1.0"
+
+        # Drain events until the runner declares failure.
+        events: list[dict[str, Any]] = []
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            events.extend(plugin.feed_iq(_EMPTY))
+            st = plugin.status()
+            if st["state"] == "failed":
+                break
+            await asyncio.sleep(0.05)
+
+        final_status = plugin.status()
+        assert final_status["state"] == "failed"
+        # The partial JSON line was counted as a parse_error on at least
+        # one incarnation of the child (each respawn re-emits the partial
+        # JSON, so total parse_errors >= 1 across the lifecycle).
+        assert final_status["parse_errors"] >= 1
+        # Failed decoder_state event surfaced.
+        failed_events = [
+            e for e in events
+            if e.get("kind") == "decoder_state" and e.get("state") == "failed"
+        ]
+        assert failed_events, "expected a failed decoder_state event"
+    finally:
+        await plugin.astop()

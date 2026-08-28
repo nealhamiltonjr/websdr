@@ -98,6 +98,82 @@ _SBS_PORT_HINT = int(os.environ.get("OPENWEBRX_PLUS_DUMP1090_SBS_PORT", "0"))
 _SNAPSHOT_INTERVAL_S = float(
     os.environ.get("OPENWEBRX_PLUS_DUMP1090_SNAPSHOT_INTERVAL", "0.3")
 )
+# Fork override: skip the --version probe (one of "fa" / "mutability" /
+# "readsb" / "unknown"). The probe runs once at startup and the result
+# is reported in the "ready" event for diagnostics; the override lets
+# operators skip the probe on air-gapped systems where running an extra
+# subprocess is undesirable.
+_FORK_OVERRIDE = os.environ.get("OPENWEBRX_PLUS_DUMP1090_FORK", "").strip().lower()
+
+
+def _probe_fork(binary: str) -> str | None:
+    """Probe the dump1090-class binary's fork identity by running
+    ``<binary> --version`` (or ``-V`` for readsb) and grepping the
+    output for known fork signatures.
+
+    Returns one of ``"fa"`` (dump1090-fa), ``"mutability"``
+    (dump1090-mutability), ``"readsb"`` (readsb), or ``None`` (unknown /
+    probe failed). The probe is best-effort: a None return does NOT
+    block startup — the bridge still spawns the binary with the
+    configured args; the fork field in the ready event simply reports
+    "unknown" so the operator knows the probe didn't match.
+
+    The probe uses a 1.0 s timeout (subprocess.run timeout) and never
+    raises. Probe failures (binary missing, exit nonzero, timeout, etc.)
+    all return None.
+    """
+    import subprocess  # noqa: PLC0415 — lazy import (module load order)
+
+    # Try --version first (works on dump1090-fa, dump1090-mutability);
+    # fall back to -V (readsb uses -V; some forks support both).
+    for probe_arg in ("--version", "-V"):
+        try:
+            r = subprocess.run(  # noqa: S603 — argv is user-configurable
+                [binary, probe_arg],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        out = (r.stdout + "\n" + r.stderr).lower()
+        # Order matters: 'mutability' must be checked before 'fa'
+        # (dump1090-mutability's version string also contains 'dump1090'
+        # but not 'fa' as a standalone token). 'readsb' has no
+        # 'dump1090' in its version string at all.
+        if "readsb" in out:
+            return "readsb"
+        if "mutability" in out:
+            return "mutability"
+        if "dump1090-fa" in out or " dump1090 fa" in out or "\nfa " in out:
+            return "fa"
+        # Some fa builds print just "dump1090 1.x.y-###" without the -fa
+        # suffix; treat any "dump1090 1." version string as fa-shaped
+        # (most modern forks are fa-derived). Mutability prints its own
+        # name; readsb prints its own; so a bare "dump1090 1.x" is
+        # almost certainly fa.
+        if "dump1090" in out and "1." in out:
+            return "fa"
+    return None
+
+
+def _resolve_fork() -> str:
+    """Pick the fork: explicit override > probe result. Never raises."""
+    if _FORK_OVERRIDE:
+        # Operator-explicit override; trust it verbatim (lowercased).
+        if _FORK_OVERRIDE not in {"fa", "mutability", "readsb", "unknown"}:
+            sys.stderr.write(
+                f"sbs1_to_ndjson: unknown OPENWEBRX_PLUS_DUMP1090_FORK="
+                f"{_FORK_OVERRIDE!r}; expected one of "
+                "fa/mutability/readsb/unknown; ignoring\n"
+            )
+            return "unknown"
+        return _FORK_OVERRIDE
+    probed = _probe_fork(_REAL_BIN)
+    return probed if probed is not None else "unknown"
+
+
 
 # SBS1 fields after the leading "MSG" token, 1-indexed (see module docstring).
 _SBS_FIELDS = (
@@ -132,7 +208,7 @@ def _emit(obj: dict[str, object]) -> None:
     sys.stdout.flush()
 
 
-def _emit_ready(child_pid: int, sbs_port: int, argv: list[str]) -> None:
+def _emit_ready(child_pid: int, sbs_port: int, argv: list[str], fork: str) -> None:
     _emit(
         {
             "kind": "ready",
@@ -145,6 +221,7 @@ def _emit_ready(child_pid: int, sbs_port: int, argv: list[str]) -> None:
             "center_freq": _CENTER_FREQ,
             "sbs_port": sbs_port,
             "real_binary": _REAL_BIN,
+            "fork": fork,
             "argv": argv,
         }
     )
@@ -499,11 +576,21 @@ def main() -> int:
             )
             return 1
 
+    # Resolve the dump1090-class fork identity once at startup. The
+    # probe is best-effort (1s timeout, never raises); the result goes
+    # in the ready event for diagnostics. In --no-spawn mode the probe
+    # is still useful because the operator might be pointing at a
+    # remote SBS1 server fed by an unknown fork; if the local _REAL_BIN
+    # isn't a real binary (e.g. "dump1090" with no PATH match), the
+    # probe silently returns None and the ready event reports "unknown".
+    fork = _resolve_fork()
+
     # Emit ready immediately so the runner's handshake completes.
     _emit_ready(
         child_pid=child_proc.pid if child_proc else 0,
         sbs_port=sbs_port,
         argv=[_REAL_BIN, _REAL_ARGS],
+        fork=fork,
     )
 
     # Start the SBS1 reader thread (connects with retry).

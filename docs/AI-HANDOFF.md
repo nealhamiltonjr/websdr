@@ -151,18 +151,18 @@ regeneration — proven by checksum, see §7.2).
 ## 4. Where we are — verified status
 
 Every number below was re-verified at snapshot time (2026-08-28, post
-slice-29, origin/main `fd7c98c`):
+slice-31, origin/main `<pending slice-31 commit>`):
 
 | Gate | Result |
 |---|---|
-| Server tests: `scripts/run-server-tests.sh` | **504 passed, 1 skipped**, 84% coverage (~80 s) |
+| Server tests: `scripts/run-server-tests.sh` | **525 passed, 1 skipped**, 84% coverage (~82 s) |
 | `mypy openwebrx_plus` (CI invocation via pyproject.toml; 60 files) | **Success, no issues** — CI is green. |
 | `mypy --strict openwebrx_plus` (CLI override, NOT how CI invokes) | 2 errors in `sources/sdrplay.py` lines 193, 207 (`@ffi.callback(...)` untyped decorator) — **NOT a CI failure**. pyproject sets `disallow_untyped_decorators = false` (FastAPI/cffi have opaque stubs). Adding `# type: ignore[untyped-decorator]` was tried in slice-23 and reverted in slice-23b (commit `6800d05`) because under pyproject config the comment is "unused" → itself a strict error. See §5.1 below for the resolution. |
 | `ruff check .` | clean |
 | Web `vitest` | **178/178 pass** across 14 test files (~3 s) |
 | Web `tsc --noEmit` | clean |
 | `vite build` | clean (one chunk-size warning, not an error) |
-| GitHub Actions CI (run `33142141112` for `fd7c98c`) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types |
+| GitHub Actions CI (run `33142493511` for `aa18de0` = slice-30) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types. (Slice-31 CI run pending at write time.) |
 
 **What works end-to-end today, hardware-free:**
 
@@ -254,6 +254,8 @@ slice-29, origin/main `fd7c98c`):
 
 | Slice | Title | Sync commit |
 |---|---|---|
+| 31 | dump1090 fixture improvements: fork auto-detect + SBS1 auto-discovery + new failure modes | `<pending>` |
+| 30 | docs refresh: AI-HANDOFF.md + STATUS.md to actual state; PAT-strip push of slices 27/28/29 | `aa18de0` |
 | 29 | FT8 v2.1 — wire soft FSK demod → sum-product LDPC as primary decode path | `fd7c98c` |
 | 28 | FT8 v2 LDPC — real parity + syndrome check + sum-product decoder | `1b4daba` |
 | 27 | sync uv.lock (tomli-w drift) + worklog | `c57af88` |
@@ -281,7 +283,7 @@ slice-29, origin/main `fd7c98c`):
 | 6.4 | AIS decoder (in-process plugin) + vessel list viz | `198141f` |
 | 6.1-6.3 | LICENSE + linked readouts + popout crosshair sync | `d56c558` |
 
-Full detail in `worklog.md` (append-only, 30 entries since slice-1).
+Full detail in `worklog.md` (append-only, 31 entries since slice-1).
 
 ## 5. What's left — prioritized roadmap with implementation guidance
 
@@ -423,19 +425,36 @@ To swap in real DeepFilterNet:
 Estimated effort: half a day for the code; weights licensing review
 adds a week or two depending on operator policy.
 
-### 5.6 dump1090 binary / fixture improvements
+### 5.6 dump1090 binary / fixture improvements — ✅ SHIPPED (slice-31)
 
 The slice-16 SBS1→NDJSON bridge (`scripts/sbs1_to_ndjson.py`) is a thin
-Python wrapper around the real dump1090 binary. Future polish:
+Python wrapper around the real dump1090 binary. Slice-31 ships the
+three remaining polish items:
 
-1. Auto-detect `dump1090-fa` vs `dump1090-mutability` (slightly different
-   SBS1 field semantics).
-2. Add a `--net-ro-port` auto-discovery if `OPENWEBRX_PLUS_DUMP1090_BIN`
-   is unset (currently requires the wrapper script explicitly).
-3. Extend `tests/fakes/fake_dump1090.py` with more failure modes
-   (TCP-EOF mid-handshake, malformed CSV, partial JSON row).
+1. **Auto-detect dump1090-fa vs mutability vs readsb**: the bridge now
+   probes `<binary> --version` once at startup (1.0s timeout, never
+   raises) and reports the fork identity in the ready event's `fork`
+   field (one of `"fa"` / `"mutability"` / `"readsb"` / `"unknown"`).
+   Override via `OPENWEBRX_PLUS_DUMP1090_FORK` env var (skips the
+   probe on air-gapped systems).
+2. **Auto-discovery of a running SBS1 server**: the dump1090 plugin
+   (`apps/server/openwebrx_plus/plugins/dump1090.py`) now probes
+   `127.0.0.1:30003` (the standard SBS1 port for dump1090-fa/mutability/
+   readsb) when `OPENWEBRX_PLUS_DUMP1090_BIN` is unset. If a server is
+   reachable, the plugin defaults to the SBS1 bridge script in
+   `--no-spawn` mode against that endpoint — operators with a running
+   dump1090 service need no extra config.
+3. **Two new fake_dump1090 failure modes** for the runner's recovery
+   path tests: `--vanish-after-ready-secs N` (emit ready, sleep, close
+   stdout without exiting — tests the "decoder vanished after ready"
+   path) + `--emit-partial-json-die` (emit ready, write a truncated
+   JSON line, exit 0 — tests the JSON parser recovery path).
 
-Estimated effort: half a day.
+Tests: `tests/test_sbs1_bridge.py::TestForkAutoDetect` (8 tests),
+`tests/test_dump1090_plugin.py` (NEW, 9 tests covering the probe + path
+resolution + auto-discovery branches), and 2 new failure-mode tests in
+`tests/test_subprocess_plugins.py`. All 19 new tests green; server
+suite 525 passed + 1 skipped (was 504+1).
 
 ### 5.7 Mid-term / long-term items (lower priority)
 
