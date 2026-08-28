@@ -1,8 +1,10 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-28, after slice-14 (HD audio decode + self-listing endpoint — completes the federation polish arc)
+**Updated:** 2026-08-28, post slice-21 (FT8 contract surface + DigiMessageListViz — completes the audio-band digi-mode wire format foundation)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
-**Companion:** `ADR/` for decision records; `docs/slice-01-plan.md` for the original slice plan (kept for history).
+**Companion:** `ADR/` for decision records; `docs/AI-HANDOFF.md` for the authoritative handoff (this file's snapshots are slice-14-detailed; slices 15-21 are summarized in the §"Delivery history addendum" below and fully documented in `docs/AI-HANDOFF.md` §4 and `worklog.md`).
+
+> **Slice 15-21 addendum (2026-08-28):** SpyServer runtime tune forwarding (slice-15), dump1090 SBS1→NDJSON bridge (slice-16), dump978 timing recovery + carrier offset compensation (slice-17), DeepFilterNet Rust module scaffold (slice-18, real spectral subtraction v1), RNNoise WASM client-side loader (slice-19), SDRangel client manifest scaffolding (slice-20, raises NotImplementedError on spawn — implementation deferred), FT8 contract surface + DigiMessageListViz (slice-21, FSK demod + LDPC + CRC-14 + message unpack deferred). Latest verified gate counts: **456 server tests pass + 1 skipped (84% coverage, 76.9 s)**, **163 web tests pass**, ruff clean, tsc clean, vite build clean; **mypy --strict** has 2 known errors in `sources/sdrplay.py` (cffi callback decorator untyped-annotation) — not blocking, fix recipe in `docs/AI-HANDOFF.md` §5.1.
 
 ---
 
