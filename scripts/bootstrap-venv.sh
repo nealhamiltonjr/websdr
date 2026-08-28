@@ -89,7 +89,7 @@ if ! "${PY}" -c "import fastapi, numpy, structlog" 2>/dev/null; then
     cd "${REPO_ROOT}/apps/server"
     uv pip install --python "${PY}" \
         fastapi uvicorn websockets httpx pydantic pydantic-settings \
-        numpy structlog prometheus-client
+        numpy structlog prometheus-client tomli_w
     # Editable install of the openwebrx_plus package itself, without deps
     # (the pyproject.toml declares pycsdr as a git direct reference that
     # would try to build from source on every sync — we manage pycsdr
