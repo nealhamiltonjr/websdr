@@ -565,3 +565,86 @@ fresh checkout (the env-reset case that wiped `.venv/` + the
   `scripts/bootstrap-venv.sh` (previously documented only in
   `scripts/README-dsp-bootstrap.md` as a recipe). Operators / AIs
   picking the project up cold can run one script to rebuild the env.
+
+---
+## slice-24 (2026-08-28): RNNoise AudioWorkletProcessor — closes slice-19 loader
+
+**Goal:** close the slice-19 roadmap item "Wire the loaded
+RNNoiseDenoiser into the AudioPlayer." Slice-19 shipped the WASM
+loader contract; slice-24 wires it into the actual audio path via
+an AudioWorkletProcessor.
+
+**Shipped:**
+- `apps/web/public/worklets/rnnoise-processor.js`: plain-JS
+  AudioWorkletProcessor (TS-typed reference doc'd in the file
+  header). Vite serves public/ verbatim, so the file is reachable
+  at `/worklets/rnnoise-processor.js` in both dev and prod.
+  - Buffers 128-sample render quanta into 480-sample frames
+    (RNNOISE_FRAME_SIZE matches the slice-19 constant).
+  - Calls the WASM `Denoiser.process_frame()` per 480-sample frame.
+  - Drains denoised frames from an output ring buffer (4× frame
+    size = 40 ms headroom for bursty quanta).
+  - Async dynamic `import('/pkg/rnnoise_wasm.js')` inside the
+    worklet — until resolved, passes audio through unchanged.
+    On failure, permanently falls back to pass-through. Posts
+    a `{type:'ready'}` message to the main thread on success.
+  - Control port messages: `{type:'reset'}` clears state,
+    `{type:'dispose'}` permanently disables.
+  - Initial latency: ~10 ms (one 480-sample frame at 48 kHz).
+  - NOTE: dynamic `import()` in AudioWorkletGlobalScope requires
+    Chromium 105+ or Firefox 113+. Safari 16.x doesn't support it;
+    operators on Safari get the direct path (the AudioPlayer's
+    enableClientDenoise() returns false before attempting worklet
+    registration, see user-agent feature detection below).
+
+- `apps/web/src/lib/audio/AudioPlayer.ts`: added the client-denoise
+  integration.
+  - New `clientDenoiseEnabled(): boolean` signal (UI binding).
+  - New `enableClientDenoise(): Promise<boolean>` — calls the
+    slice-19 `loadRNNoiseModule()` to probe for the WASM; if not
+    deployed, returns false. Otherwise registers the worklet via
+    `audioContext.audioWorklet.addModule('/worklets/rnnoise-processor.js')`
+    and inserts an `AudioWorkletNode` between the BufferSourceNodes
+    and the GainNode. Idempotent. Feature-detects `audioWorklet`
+    (Safari 16.x lacks it → returns false without throwing).
+  - New `disableClientDenoise(): void` — posts dispose to the
+    worklet, disconnects the node, returns to the direct path.
+    Idempotent.
+  - Refactored `enqueue()` to use a `sinkNode` pointer (either
+    `gainNode` for direct path or `denoiseNode` for worklet path).
+  - Refactored `disable()` to clean up the worklet node too.
+  - Replaced `window.AudioContext` lookup with `globalThis.AudioContext`
+    so the node-environment vitest tests can stub the constructor via
+    `vi.stubGlobal('AudioContext', ...)`.
+
+- `apps/web/src/lib/audio/AudioPlayer.test.ts`: new 15-test suite
+  covering the state machine:
+  - Initial state (muted, volume 0.5, denoise disabled, enqueue
+    no-op when muted).
+  - enable/disable transitions (creates AudioContext, idempotent,
+    close() called on disable, BufferSource scheduled on enqueue).
+  - Client denoise state machine (returns false before enable,
+    returns false when WASM not deployed, disableClientDenoise
+    idempotent, disable resets denoise state).
+  - Volume control (setVolume updates gain, toggleMute toggles).
+
+**Quality gates verified (all green):**
+- web vitest: 178/178 pass (~3.2 s; 163 prior + 15 new).
+- `tsc --noEmit`: clean.
+- `vite build`: clean (chunk-size warning, not an error).
+- (server tests not touched in this slice; 456/1 skipped confirmed
+  in the prior turn's slice-23 verification.)
+
+**Sync:** will commit + push next.
+
+**Future work remaining:**
+- Wire `enableClientDenoise()` to a UI control in DSPControls
+  (the dsp_mode toggle already has raw/classic/ai/cascade options;
+  the 'cascade' mode is the natural trigger).
+- Test the worklet processor code itself in a real AudioWorklet
+  context (the unit tests cover the AudioPlayer state machine;
+  worklet integration is verified manually in the dev browser).
+- Cross-browser check: confirm Chromium 105+ and Firefox 113+
+  both load the WASM inside the worklet (Safari 16.x explicitly
+  excluded; check Safari 17+ when the AudioWorklet import() spec
+  support lands).
