@@ -190,7 +190,7 @@ class SdrplayBinding:
         library's callback thread. Returns samples-per-packet."""
         ffi, lib = self._ffi, self._lib
 
-        @ffi.callback("mir_sdr_StreamCallback_t")
+        @ffi.callback("mir_sdr_StreamCallback_t")  # type: ignore[untyped-decorator]  # cffi.callback has no typed signature
         def _stream_cb(xi: Any, xq: Any, _first: int, _gr: int, _rf: int, _fs: int,
                        num_samples: int, hw_removed: int, _ctx: Any) -> None:
             if hw_removed:
@@ -204,7 +204,7 @@ class SdrplayBinding:
             )
             callback(xi_arr, xq_arr)
 
-        @ffi.callback("mir_sdr_GainChangeCallback_t")
+        @ffi.callback("mir_sdr_GainChangeCallback_t")  # type: ignore[untyped-decorator]  # cffi.callback has no typed signature
         def _gain_cb(_grdb: int, _lna: int, _ctx: Any) -> None:
             pass  # informational only
 

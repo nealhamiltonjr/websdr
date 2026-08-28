@@ -509,3 +509,59 @@ workflows fail" based on the historical Actions record.
    scaffold; 1-2 days for v1).
 5. DeepFilterNet weights + upstream crate (closes the slice-18
    scaffold; half a day code, weights licensing review adds time).
+
+---
+## slice-23 (2026-08-28): close sdrplay mypy --strict regression + bootstrap-venv.sh tooling
+
+**Goal:** close the only known static-gate regression (sdrplay cffi callback
+untyped-decorator errors) so mypy --strict runs fully clean, AND ship a
+persistent bootstrap script that recreates the dev environment from a
+fresh checkout (the env-reset case that wiped `.venv/` + the
+`scripts/pycsdr-build/` restore artifacts this session).
+
+**Shipped:**
+- `apps/server/openwebrx_plus/sources/sdrplay.py`: added
+  `# type: ignore[untyped-decorator]` on the two `@ffi.callback(...)`
+  decorators (`_stream_cb` at line 193, `_gain_cb` at line 207). cffi's
+  callback protocol is intentionally opaque (the decorated function
+  takes opaque `Any` pointers and produces a `cffi.CData` object), so
+  a typed signature is impractical without a full cffi typing shim.
+  This matches the pragmatic-fix option from `docs/AI-HANDOFF.md` §5.1.
+- `scripts/bootstrap-venv.sh`: new persistent idempotent script that
+  rebuilds the entire dev env from source on a fresh checkout:
+  1. `apt-get download libsamplerate0 libsamplerate0-dev` + extract
+     to `~/.local/usr/` + patch the `samplerate.pc` prefix.
+  2. Clone `jketterl/csdr.git` + cmake build + install to `~/.local/usr/`.
+     Includes the `target_include_directories` + `target_link_directories`
+     patch from `scripts/README-dsp-bootstrap.md` (libcsdr upstream
+     CMakeLists doesn't propagate samplerate/fftw3 dirs to targets).
+  3. `uv venv` in `apps/server/` + install runtime deps + editable
+     openwebrx_plus + dev tooling (pytest/ruff/mypy/setuptools/wheel/pip).
+  4. Clone `jketterl/pycsdr.git` + `pip install --no-build-isolation`
+     against the user-prefix libcsdr (CFLAGS/LDFLAGS/PKG_CONFIG_PATH
+     all set).
+  5. Regenerate IQ fixtures via `scripts/generate_iq_fixtures.py`.
+  Each step is idempotent (checks for already-done state and skips).
+- No code changes outside the sdrplay type: ignore — slice-22's
+  secondary FFT wire format work remains unchanged.
+
+**Quality gates verified (all green):**
+- `mypy --strict openwebrx_plus`: **Success: no issues found in 57
+  source files** (was 3 errors — 2 sdrplay cffi callbacks + 1
+  transient tomli_w not-installed).
+- `ruff check openwebrx_plus`: All checks passed!
+- server pytest: 456 passed, 1 skipped (84% coverage, ~76 s).
+- web vitest: 163/163 pass (~2.8 s).
+- `tsc --noEmit`: clean.
+- `vite build`: clean (chunk-size warning, not an error).
+
+**Sync:** will commit + push next.
+
+**Stage Summary:**
+- The "mypy --strict has 2 known errors" caveat in `docs/AI-HANDOFF.md`
+  §4 + §5.1 is now stale — the gate runs fully clean. The next
+  handoff-bundle revision can drop the §5.1 fix-recipe section.
+- The from-source bootstrap path is now persistent in
+  `scripts/bootstrap-venv.sh` (previously documented only in
+  `scripts/README-dsp-bootstrap.md` as a recipe). Operators / AIs
+  picking the project up cold can run one script to rebuild the env.
