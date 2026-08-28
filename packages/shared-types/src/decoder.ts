@@ -237,8 +237,16 @@ export type TextDecoderName = (typeof TEXT_DECODERS)[number];
 export const IMAGE_DECODERS = ['sstv'] as const;
 export type ImageDecoderName = (typeof IMAGE_DECODERS)[number];
 
-export const DIGI_MESSAGE_DECODERS = ['ft8'] as const;
+export const DIGI_MESSAGE_DECODERS = ['ft8', 'wspr', 'jt65'] as const;
 export type DigiMessageDecoderName = (typeof DIGI_MESSAGE_DECODERS)[number];
+
+/** Decoder names that emit packet wire events (slice-48).
+ *
+ *  AX.25 (slice-45) emits "packet" events with source/destination
+ *  callsigns + digipeaters + control + info payload, plus "crc_error"
+ *  events for corrupted frames. */
+export const PACKET_DECODERS = ['ax25'] as const;
+export type PacketDecoderName = (typeof PACKET_DECODERS)[number];
 
 /** FT8 (or similar audio-band digi-mode) "message" event — one
  *  decoded free-form text message (callsign, grid, signal report,
@@ -405,5 +413,65 @@ export function isImageModeEvent(
   return (
     imageDecoderNames.includes(envelope.decoder) &&
     envelope.event.kind === 'mode'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Packet decoder events (slice-48) — AX.25
+// ---------------------------------------------------------------------------
+
+const packetDecoderNames: readonly string[] = PACKET_DECODERS;
+
+/** A decoded AX.25 packet — source/destination callsigns + info payload. */
+export interface PacketEvent {
+  kind: 'packet';
+  ts: number;
+  /** Source callsign (with SSID, e.g., "K1ABC-1"). */
+  source: string;
+  /** Destination callsign (with SSID). */
+  destination: string;
+  /** Digipeater callsigns (with SSIDs). */
+  digipeaters: string[];
+  /** Control byte (determines frame type: I/S/U). */
+  control: number;
+  /** Frame type: "I" (information), "S" (supervisory), "U" (unnumbered). */
+  frame_type: string;
+  /** Info payload as hex string. */
+  info_hex: string;
+  /** Info payload as ASCII text (lossy — non-ASCII replaced). */
+  info_text: string;
+  /** Sequential index of this packet. */
+  packet_index: number;
+}
+
+/** A CRC error event — frame was received but the CRC check failed. */
+export interface PacketCrcErrorEvent {
+  kind: 'crc_error';
+  ts: number;
+  /** Error reason (e.g., "CRC mismatch", "parse error"). */
+  reason: string;
+  /** First 64 bytes of the raw frame as hex (for diagnostics). */
+  raw_hex: string;
+  /** Total frame length in bytes. */
+  length: number;
+}
+
+/** Type guard: this decoder event is an AX.25 packet. */
+export function isPacketEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: PacketEvent } {
+  return (
+    packetDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'packet'
+  );
+}
+
+/** Type guard: this decoder event is an AX.25 CRC error. */
+export function isPacketCrcErrorEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: PacketCrcErrorEvent } {
+  return (
+    packetDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'crc_error'
   );
 }

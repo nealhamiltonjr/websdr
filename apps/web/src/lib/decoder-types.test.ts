@@ -12,11 +12,14 @@ import {
   TEXT_DECODERS,
   IMAGE_DECODERS,
   DIGI_MESSAGE_DECODERS,
+  PACKET_DECODERS,
   isTextCharEvent,
   isTextSnapshotEvent,
   isImageEvent,
   isImageScanlineEvent,
   isImageModeEvent,
+  isPacketEvent,
+  isPacketCrcErrorEvent,
   type DecoderEventEnvelope,
 } from '@openwebrx-plus/shared-types';
 
@@ -42,8 +45,16 @@ describe('decoder family constants (slice-42)', () => {
     expect(AIS_DECODERS).toEqual(['ais']);
   });
 
-  it('DIGI_MESSAGE_DECODERS unchanged', () => {
-    expect(DIGI_MESSAGE_DECODERS).toEqual(['ft8']);
+  it('DIGI_MESSAGE_DECODERS includes ft8, wspr, jt65', () => {
+    expect(DIGI_MESSAGE_DECODERS).toContain('ft8');
+    expect(DIGI_MESSAGE_DECODERS).toContain('wspr');
+    expect(DIGI_MESSAGE_DECODERS).toContain('jt65');
+    expect(DIGI_MESSAGE_DECODERS).toHaveLength(3);
+  });
+
+  it('PACKET_DECODERS includes ax25', () => {
+    expect(PACKET_DECODERS).toContain('ax25');
+    expect(PACKET_DECODERS).toHaveLength(1);
   });
 });
 
@@ -182,5 +193,74 @@ describe('isImageModeEvent', () => {
       event: { kind: 'mode', ts: 0, mode: 'SCOTTIE_1', vis_code: 60 },
     };
     expect(isImageModeEvent(env)).toBe(true);
+  });
+});
+
+// ============================================================================
+// Packet decoder type guards (slice-48)
+// ============================================================================
+
+describe('isPacketEvent', () => {
+  it('returns true for ax25 packet events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder',
+      decoder: 'ax25',
+      receiverId: 'rx-1',
+      event: {
+        kind: 'packet',
+        ts: 100,
+        source: 'K1ABC-1',
+        destination: 'APRS',
+        digipeaters: ['WIDE2-2'],
+        control: 3,
+        frame_type: 'U',
+        info_hex: '6869',
+        info_text: 'hi',
+        packet_index: 0,
+      },
+    };
+    expect(isPacketEvent(env)).toBe(true);
+  });
+
+  it('returns false for non-ax25 decoders', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder',
+      decoder: 'cw',
+      receiverId: 'rx-1',
+      event: { kind: 'packet', ts: 0, source: '', destination: '', digipeaters: [], control: 0, frame_type: '', info_hex: '', info_text: '', packet_index: 0 },
+    };
+    expect(isPacketEvent(env)).toBe(false);
+  });
+
+  it('returns false for crc_error events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder',
+      decoder: 'ax25',
+      receiverId: 'rx-1',
+      event: { kind: 'crc_error', ts: 0, reason: 'CRC mismatch', raw_hex: '00', length: 1 },
+    };
+    expect(isPacketEvent(env)).toBe(false);
+  });
+});
+
+describe('isPacketCrcErrorEvent', () => {
+  it('returns true for ax25 crc_error events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder',
+      decoder: 'ax25',
+      receiverId: 'rx-1',
+      event: { kind: 'crc_error', ts: 100, reason: 'CRC mismatch', raw_hex: 'deadbeef', length: 32 },
+    };
+    expect(isPacketCrcErrorEvent(env)).toBe(true);
+  });
+
+  it('returns false for packet events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder',
+      decoder: 'ax25',
+      receiverId: 'rx-1',
+      event: { kind: 'packet', ts: 0, source: 'X', destination: 'Y', digipeaters: [], control: 0, frame_type: 'I', info_hex: '', info_text: '', packet_index: 0 },
+    };
+    expect(isPacketCrcErrorEvent(env)).toBe(false);
   });
 });
