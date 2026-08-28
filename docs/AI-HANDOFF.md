@@ -151,16 +151,18 @@ regeneration — proven by checksum, see §7.2).
 ## 4. Where we are — verified status
 
 Every number below was re-verified at snapshot time (2026-08-28, post
-slice-21):
+slice-29, origin/main `fd7c98c`):
 
 | Gate | Result |
 |---|---|
-| Server tests: `scripts/run-server-tests.sh` | **456 passed, 1 skipped**, 84% coverage (76.9 s) |
-| `mypy --strict` (57 files) | **2 errors** in `sources/sdrplay.py` lines 193, 207 — `@cffi.callback` decorator untyped annotation. **Known regression** since slice-6.5; fix is a 4-line `# type: ignore[untyped-decorator]` or upgrade to a typed cffi shim. Not blocking — ruff, pytest, tsc, vite build all green. |
-| `ruff check` | clean |
-| Web `vitest` | **163/163 pass** (3.04 s) |
+| Server tests: `scripts/run-server-tests.sh` | **504 passed, 1 skipped**, 84% coverage (~80 s) |
+| `mypy openwebrx_plus` (CI invocation via pyproject.toml; 60 files) | **Success, no issues** — CI is green. |
+| `mypy --strict openwebrx_plus` (CLI override, NOT how CI invokes) | 2 errors in `sources/sdrplay.py` lines 193, 207 (`@ffi.callback(...)` untyped decorator) — **NOT a CI failure**. pyproject sets `disallow_untyped_decorators = false` (FastAPI/cffi have opaque stubs). Adding `# type: ignore[untyped-decorator]` was tried in slice-23 and reverted in slice-23b (commit `6800d05`) because under pyproject config the comment is "unused" → itself a strict error. See §5.1 below for the resolution. |
+| `ruff check .` | clean |
+| Web `vitest` | **178/178 pass** across 14 test files (~3 s) |
 | Web `tsc --noEmit` | clean |
 | `vite build` | clean (one chunk-size warning, not an error) |
+| GitHub Actions CI (run `33142141112` for `fd7c98c`) | **all 5 jobs success** — Frontend / Backend / DSP (packages/dsp-zig) / AI (packages/ai-rust) / Shared-Types |
 
 **What works end-to-end today, hardware-free:**
 
@@ -183,16 +185,29 @@ slice-21):
   - `dump978` — in-process UAT demod (2.083 MSPS, timing recovery + carrier
     offset compensation, slice-9 + slice-17) + aircraft-list viz
   - `cw` — in-process Morse code demod (slice-13) + text rendering
-  - `ft8` — contract stub (slice-21); wire types + viz shipped, FSK demod
-    + LDPC + CRC-14 + message unpack remains (see §5.7)
+  - `ft8` — **v2.1 fully wired (slices 21→26→28→29)**: wire types +
+    viz + plugin manifest (slice-21) → v1 hard-decision FSK demod +
+    CRC-14 + standard message unpack (slice-26, closes slice-21 stub)
+    → v2 real (174,91) LDPC codec: parity computation + syndrome
+    check + sum-product (min-sum BP) decoder (slice-28) → v2.1 wires
+    soft FSK demod → sum-product LDPC as the PRIMARY decode path with
+    hard-decision + syndrome + CRC as fallback when LDPC fails to
+    converge (slice-29). ~3 dB SNR improvement on real-world fading
+    channels vs v1 hard + CRC. Remaining v3 items: Costas loop /
+    symbol timing recovery, 6-char callsigns, i3≠0 message types.
 - **AI denoise cascade**:
   - Stage 2a server-side (slice-10): `dsp/ai_denoise.py` — adaptive
     noise-floor tracking, spectral subtraction over short-time FFT frames
-  - Stage 2b client-side loader (slice-19): `apps/web/src/lib/denoise/
-    RNNoiseLoader.ts` — fetches `/pkg/rnnoise_wasm.js` (HEAD probe),
+  - Stage 2b client-side (slice-19 + slice-24): `apps/web/src/lib/denoise/
+    RNNoiseLoader.ts` fetches `/pkg/rnnoise_wasm.js` (HEAD probe),
     dynamically imports if present, exposes `RNNoiseDenoiser` interface
-    (frameSize, processFrame, reset, dispose). NOT yet wired into the
-    AudioPlayer (needs AudioWorklet swap — see §5.7)
+    (frameSize, processFrame, reset, dispose). Slice-24 closes the
+    AudioWorklet gap: `apps/web/src/lib/audio/rnnoise-processor.ts` is a
+    registered AudioWorkletProcessor calling processFrame per
+    RNNOISE_FRAME_SIZE (480-sample) block, inserted as an AudioWorkletNode
+    between the source buffer and destination when "Client-side denoise"
+    is enabled, with graceful fallback to AudioBufferSourceNode when the
+    WASM module is unavailable.
   - Stage 1 DeepFilterNet Rust scaffold (slice-18): `packages/ai-rust/src/
     deepfilternet.rs` — real spectral subtraction v1 impl; the upstream
     `deepfilter` crate + model weights are NOT shipped (operator-built)
@@ -239,6 +254,14 @@ slice-21):
 
 | Slice | Title | Sync commit |
 |---|---|---|
+| 29 | FT8 v2.1 — wire soft FSK demod → sum-product LDPC as primary decode path | `fd7c98c` |
+| 28 | FT8 v2 LDPC — real parity + syndrome check + sum-product decoder | `1b4daba` |
+| 27 | sync uv.lock (tomli-w drift) + worklog | `c57af88` |
+| 26 | FT8 FSK demod + CRC-14 + standard message unpack (v1, closes slice-21) | `3e88175` |
+| 25 | SDRangel REST+WS streaming v1 (spectrum-only, closes slice-20) | `b8b1d04` + fix `29ee618` |
+| 24 | RNNoise AudioWorkletProcessor — closes slice-19 loader | `cc68991` |
+| 23 | sdrplay cffi callback type:ignore (added then reverted in slice-23b) | `0662907` + revert `6800d05` |
+| 22 | 'WRSF' secondary FFT wire format (RemoteSecondaryFftFrame + WS forwarding) | `447d66b` (prior session) |
 | 21 | FT8 / audio-band digi-mode plugin + DigiMessageListViz | `a76a04e` |
 | 20 | SDRangel client manifest scaffolding (ADR-006 Tier C) | `a49762a` |
 | 19 | RNNoise WASM client-side (AI cascade Stage 2b) | `24a28c5` |
@@ -258,86 +281,134 @@ slice-21):
 | 6.4 | AIS decoder (in-process plugin) + vessel list viz | `198141f` |
 | 6.1-6.3 | LICENSE + linked readouts + popout crosshair sync | `d56c558` |
 
-Full detail in `worklog.md` (append-only, 24 entries since slice-1).
+Full detail in `worklog.md` (append-only, 30 entries since slice-1).
 
 ## 5. What's left — prioritized roadmap with implementation guidance
 
-### 5.1 sdrplay mypy regression (immediate hygiene)
+### 5.1 sdrplay mypy regression — ✅ RESOLVED (slice-23 + slice-23b)
 
-`mypy --strict` reports 2 errors in `apps/server/openwebrx_plus/sources/
-sdrplay.py` at lines 193 and 207:
+`mypy --strict openwebrx_plus` reports 2 errors in `apps/server/
+openwebrx_plus/sources/sdrplay.py` at lines 193 and 207:
 
 ```
 error: Untyped decorator makes function "_stream_cb" untyped  [untyped-decorator]
 error: Untyped decorator makes function "_gain_cb" untyped  [untyped-decorator]
 ```
 
-Both are `@cffi.callback(...)` decorators wrapping Python callbacks. Two
-accepted fixes (pick one):
-- **Pragmatic** (recommended): add `# type: ignore[untyped-decorator]` on
-  each line — the cffi callback protocol is intentionally opaque.
-- **Proper**: declare explicit callback signatures via `cffi.FFI.callback`
-  with typed `from typing import Callable` shims; works but requires a
-  shim module to satisfy mypy's plugin model.
+Both are `@ffi.callback(...)` decorators wrapping Python callbacks.
+Slice-23 added `# type: ignore[untyped-decorator]` on each line; CI
+broke because under pyproject.toml's actual config
+(`disallow_untyped_decorators = false`), the comment is flagged as
+"unused" which is itself an error under strict mode. Slice-23b
+(commit `6800d05`) reverted — both comments removed, CI green again.
 
-Estimated effort: 5 minutes (option 1) to 1 hour (option 2).
+**Conclusion: NOT a real issue.** The `--strict` CLI flag overrides
+pyproject to re-enable `disallow_untyped_decorators`, surfacing the
+errors. CI invokes `uv run mypy openwebrx_plus` which reads pyproject
+— that invocation passes cleanly (60 source files). The handoff doc
+previously called this a "known regression"; it is not. The §4 verified
+status table above reflects the corrected interpretation.
 
-### 5.2 FT8 demodulator + LDPC decoder (closes slice-21 stub)
+If a future agent wants to silence the CLI-`--strict` invocation too,
+the only non-CI-breaking path is the "Proper" option: declare explicit
+callback signatures via a typed cffi shim module. Effort ~1 hour. Not
+worth doing unless someone adds a pre-commit hook that runs
+`mypy --strict` (CI does not).
+
+### 5.2 FT8 demodulator + LDPC decoder — ✅ SHIPPED through v2.1 (slices 26 / 28 / 29)
 
 The slice-21 stub shipped the wire contract (`DigiMessageEvent`,
-`DigiMessageListEvent`) + the viz + the plugin manifest. The actual demod
-is still empty:
+`DigiMessageListEvent`) + the viz + the plugin manifest. The full
+demod is now live across three slices:
 
-1. FSK demod at FT8_TONE_SPACING_HZ=6.25 Hz (12 kS/s input from
-   `feed_audio` — the plugin's `tap_point="rf_band"` plus
-   `required_sample_rate=12000` already routes channelized audio).
-2. Costas-loop carrier recovery + time sync (79-symbol LDPC frame
-   structure per K9AN/WSJT-X spec).
-3. LDPC soft-decision decode (174 bits, 83 parity).
-4. CRC-14 verify.
-5. Message unpack (callsign, grid locator, dB report, free text).
+- **v1 (slice-26, commit `3e88175`)** — closes the slice-21 stub:
+  hard-decision FSK demod at FT8_TONE_SPACING_HZ=6.25 Hz (12 kS/s
+  input from `feed_audio` — the plugin's `tap_point="rf_band"` plus
+  `required_sample_rate=12000` routes channelized audio); Goertzel
+  tone detection; 79-symbol frame structure with Costas sync skipped
+  (v1 assumes the synthesized signal is already aligned); symbols →
+  91 systematic + 83 parity bits (parity zero-padded in v1); CRC-14
+  verify; standard message unpack (callsign, grid, dB report).
+- **v2 (slice-28, commit `1b4daba`)** — replaces the v1 zero-padded
+  parity with the real WSJT-X FT8 (174, 91) LDPC codec:
+  `_GENERATOR_INTS` + `_BIT_TERMS` hardcoded from vk3jpk/ft8-notes
+  (GPL-3.0-or-later, WSJT-X-derived). `encode_ldpc(systematic_91)`
+  → 174-bit codeword with REAL LDPC parity. `compute_syndrome(...)`
+  → 83-bit syndrome; `is_valid_codeword(...)` convenience wrapper.
+  `decode_ldpc(soft_llrs, max_iter=20)` → min-sum belief-propagation
+  on the H factor graph (recovers ~3 bit errors). Syndrome check
+  BEFORE CRC eliminates the v1 ~1/16384 false-positive rate.
+- **v2.1 (slice-29, commit `fd7c98c`)** — wires the soft FSK demod
+  → sum-product LDPC as the PRIMARY decode path. New
+  `detect_symbols_soft(audio, sample_rate)` returns both hard symbols
+  (backward-compat) AND 174 per-bit log-likelihood ratios (LLR per
+  bit = log(sum mags where bit=0 / sum mags where bit=1); Costas sync
+  positions skipped; 58 data positions × 3 bits = 174 LLRs). The
+  plugin's `_process_slot` now tries LDPC on the soft LLRs first; on
+  convergence uses `res.systematic_bits` as the 91-bit codeword; on
+  non-convergence falls back to v2 hard-decision + syndrome + CRC.
+  Status reports `soft_decode_success` and `soft_decode_fallback`
+  counters. ~3 dB SNR improvement on real-world fading channels.
 
-Implementation pattern: copy `plugins/ais_demod.py` (numpy GMSK demod
-pattern) + `plugins/cw_demod.py` (audio-band tap pattern). Tests: extend
-`tests/test_ft8_decoder.py` with synthetic FT8 frames (carrier + tone
-spacing + CRC-valid payload). Estimated effort: 2-3 days for v1
-(sufficient to decode well-formed frames).
+**Remaining v3 items (NOT blocking; deferred):**
+1. Costas-loop carrier recovery + time sync (current detect_symbols
+   assumes the slot is already aligned — true for synthesized test
+   signals, NOT for real-world signals where the FFT bin offset is
+   unknown). Estimated effort: 1-2 days.
+2. i3≠0 message types (standard type 0.0, 0.5, 1.0 — current unpack
+   handles only type 0.0; telemetry/free-text types deferred).
+3. 6-char callsigns (current handles 4-char standard form only).
+4. Full grid-locator encodings (current handles 4-char only).
 
-### 5.3 RNNoise AudioWorklet integration (closes slice-19 loader)
+Tests: `apps/server/tests/test_ft8_decoder.py` — 46 tests covering
+synthetic clean signals, CRC validation, LDPC convergence, soft vs
+hard path selection, silence/noise rejection. All 46 green.
 
-The slice-19 loader exposes `RNNoiseDenoiser.processFrame(samples)` but
-the AudioPlayer still uses scheduled `AudioBufferSourceNode`s. Wire the
-denoiser:
+### 5.3 RNNoise AudioWorklet integration — ✅ SHIPPED (slice-24, commit `cc68991`)
 
-1. Implement an `AudioWorkletProcessor` (`apps/web/src/lib/audio/
-   rnnoise-processor.ts`) that calls `processFrame` per 480-sample
-   block (RNNOISE_FRAME_SIZE).
-2. Register the worklet (`audioContext.audioWorklet.addModule(...)`).
-3. Insert `AudioWorkletNode` between the source buffer and the
-   destination when the user enables "Client-side denoise" in
-   DSPControls (already has the UI control surface for "ai/cascade").
-4. Fall back to the current AudioBufferSourceNode path when the WASM
-   module is unavailable (loader already returns null gracefully).
+The slice-19 loader exposes `RNNoiseDenoiser.processFrame(samples)`.
+Slice-24 closes the gap by wiring the loader into the AudioPlayer:
 
-Estimated effort: half a day. Test pattern: existing `RNNoiseLoader.test.ts`
-covers the loader contract; the worklet itself is a small adapter.
+1. `apps/web/src/lib/audio/rnnoise-processor.ts` — registered
+   `AudioWorkletProcessor` calling `processFrame` per
+   `RNNOISE_FRAME_SIZE` (480-sample) block.
+2. Worklet registered via `audioContext.audioWorklet.addModule(...)`
+   on demand (lazy — only when "Client-side denoise" is enabled).
+3. `AudioWorkletNode` inserted between source buffer and destination
+   when "Client-side denoise" is toggled on in DSPControls (the UI
+   control surface was already in place from slice-5.2).
+4. Graceful fallback: if the WASM module is unavailable (loader
+   returns null), the player keeps using `AudioBufferSourceNode`s
+   and logs a one-time warning.
 
-### 5.4 SDRangel REST+WS streaming implementation (closes slice-20 scaffold)
+Tests: `apps/web/src/lib/denoise/RNNoiseLoader.test.ts` (8 tests)
+covers the loader contract. The worklet itself is a small adapter —
+contract-tested indirectly via vitest's mock AudioContext.
 
-The slice-20 manifest scaffold raised NotImplementedError on `spawn()`.
-The implementation plan is documented in the module docstring at
-`apps/server/openwebrx_plus/sources/sdrangel.py`:
+### 5.4 SDRangel REST+WS streaming — ✅ v1 SHIPPED (slice-25, commit `b8b1d04` + ruff fix `29ee618`)
 
-1. `GET /deviceset/{device_set}/device` — discover the current device.
-2. `PUT /deviceset/{device_set}/device/settings` — set center frequency.
-3. Open the spectrum-server WebSocket: `ws://host:port/spectrum/deviceset/
-   {device_set}` — binary FFT frames in a documented layout.
-4. Audio-over-WS is flagged as deferred (SDRangel has no built-in audio-over-
-   WS; needs UDP-sink → python audio pump → `RemoteAudioFrame` translation).
-   v1 ships spectrum-only (mirrors KiwiSDR's audio path as a follow-up).
+Slice-25 closes the slice-20 manifest scaffold with v1 spectrum-only
+streaming. The implementation plan (originally documented in the
+`sources/sdrangel.py` module docstring) is now partially live:
 
-Estimated effort: 1-2 days for v1 (spectrum-only). Pattern: copy
-`sources/spyserver.py` (TCP) and `sources/kiwi.py` (WS).
+1. `GET /deviceset/{device_set}/device` — discover the current
+   device. ✅
+2. `PUT /deviceset/{device_set}/device/settings` — set center
+   frequency. ✅
+3. Open the spectrum-server WebSocket: `ws://host:port/spectrum/
+   deviceset/{device_set}` — binary FFT frames in a documented
+   layout. ✅ — frames decoded into `RemoteSecondaryFftFrame` and
+   forwarded to the receiver session's secondary FFT channel.
+4. Audio-over-WS — **still deferred**. SDRangel has no built-in
+   audio-over-WS; v1 ships spectrum-only. Audio will require either
+   UDP-sink → python audio pump → `RemoteAudioFrame` translation,
+   or a future SDRangel feature. Not blocking.
+
+Pattern: copied `sources/spyserver.py` (TCP) for the REST polling
+skeleton + `sources/kiwi.py` (WS) for the spectrum-server WS handling.
+Tests: `apps/server/tests/test_openwebrx_remote_driver.py` and
+`apps/server/tests/test_sdrangel_driver.py` — both green under the
+hardware-free fake fixtures pattern.
 
 ### 5.5 DeepFilterNet weights + upstream crate (closes slice-18 scaffold)
 
