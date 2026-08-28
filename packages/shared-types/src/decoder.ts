@@ -220,6 +220,23 @@ export function isAisFrameEvent(
  *  full demodulator is a future slice). The wire format here lets the
  *  viz component + tests land first, mirroring slice-20's SDRangel
  *  manifest pattern. */
+/** Decoder names that emit text-character wire events (slice-42).
+ *
+ *  CW (slice-13), RTTY (slice-38), PSK31 (slice-39), and Olivia
+ *  (slice-41) all emit the same frame/text event schema — a "frame"
+ *  event per decoded character and a "text" snapshot periodically.
+ *  The DigiMessageListViz + a future TextStreamViz consume any of them.
+ */
+export const TEXT_DECODERS = ['cw', 'rtty', 'psk31', 'olivia'] as const;
+export type TextDecoderName = (typeof TEXT_DECODERS)[number];
+
+/** Decoder names that emit image wire events (slice-42).
+ *
+ *  SSTV (slice-40) emits "image" events with base64-encoded RGB pixel
+ *  data, plus "scanline" progress and "mode" detection events. */
+export const IMAGE_DECODERS = ['sstv'] as const;
+export type ImageDecoderName = (typeof IMAGE_DECODERS)[number];
+
 export const DIGI_MESSAGE_DECODERS = ['ft8'] as const;
 export type DigiMessageDecoderName = (typeof DIGI_MESSAGE_DECODERS)[number];
 
@@ -272,5 +289,121 @@ export function isDigiMessageListEvent(
   return (
     digiMessageDecoderNames.includes(envelope.decoder) &&
     envelope.event.kind === 'messages'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Text-character decoder events (slice-42) — CW / RTTY / PSK31 / Olivia
+// ---------------------------------------------------------------------------
+
+const textDecoderNames: readonly string[] = TEXT_DECODERS;
+
+/** A single decoded character from a text-band decoder (CW/RTTY/PSK31/Olivia).
+ *  Emitted one per character as the decoder processes audio. */
+export interface TextCharEvent {
+  kind: 'frame';
+  ts: number;
+  /** The decoded character (may be a control char like \n, \r, space). */
+  char: string;
+}
+
+/** A text snapshot from a text-band decoder — the full accumulated text
+ *  up to this point. Emitted periodically (every ~0.5 s) or on word gaps. */
+export interface TextSnapshotEvent {
+  kind: 'text';
+  ts: number;
+  /** The full accumulated decoded text. */
+  text: string;
+}
+
+/** Type guard: this decoder event is a text-character frame event. */
+export function isTextCharEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: TextCharEvent } {
+  return (
+    textDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'frame'
+  );
+}
+
+/** Type guard: this decoder event is a text snapshot. */
+export function isTextSnapshotEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: TextSnapshotEvent } {
+  return (
+    textDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'text'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Image decoder events (slice-42) — SSTV
+// ---------------------------------------------------------------------------
+
+const imageDecoderNames: readonly string[] = IMAGE_DECODERS;
+
+/** A complete decoded image from an image-band decoder (SSTV).
+ *  The `data` field is base64-encoded raw RGB bytes (height × width × 3),
+ *  row-major. The frontend reconstructs via Uint8Array → ImageData →
+ *  putImageData. No PNG compression (keeps the encoder pure-numpy, no
+ *  PIL dependency in the live path). */
+export interface ImageEvent {
+  kind: 'image';
+  ts: number;
+  /** The SSTV mode name (SCOTTIE_1, MARTIN_1, etc.). */
+  mode: string;
+  width: number;
+  height: number;
+  /** Base64-encoded raw RGB bytes (no header). */
+  data: string;
+  /** Sequential index of this image (0, 1, 2, ...). */
+  image_index: number;
+}
+
+/** Scanline progress event — emitted every N scanlines during decoding. */
+export interface ImageScanlineEvent {
+  kind: 'scanline';
+  ts: number;
+  /** Number of scanlines decoded so far. */
+  scanline: number;
+}
+
+/** Mode detection event — emitted when the VIS code is identified. */
+export interface ImageModeEvent {
+  kind: 'mode';
+  ts: number;
+  /** The SSTV mode name (SCOTTIE_1, MARTIN_1, etc.). */
+  mode: string;
+  /** The raw VIS code byte (0-127). */
+  vis_code: number;
+}
+
+/** Type guard: this decoder event is an image event. */
+export function isImageEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: ImageEvent } {
+  return (
+    imageDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'image'
+  );
+}
+
+/** Type guard: this decoder event is an image scanline progress event. */
+export function isImageScanlineEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: ImageScanlineEvent } {
+  return (
+    imageDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'scanline'
+  );
+}
+
+/** Type guard: this decoder event is an image mode detection event. */
+export function isImageModeEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: ImageModeEvent } {
+  return (
+    imageDecoderNames.includes(envelope.decoder) &&
+    envelope.event.kind === 'mode'
   );
 }
