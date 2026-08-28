@@ -912,3 +912,37 @@ syndrome check, Costas loop, and 6-char callsigns are deferred to v2.
   frames (the FT8_LDPC matrix, the Costas sync pattern, the symbol
   position layout, the alphabet). v1 is spec-faithful but unverified
   on-air.
+
+---
+Task ID: 27
+Agent: super-z (main agent)
+Task: Continue autonomously per docs/AI-HANDOFF.md §5. Verify state, close any lingering items.
+
+Work Log:
+- Read worklog + STATUS.md + git log to establish true current state.
+- Discovered the prior-session summary was STALE: it claimed slices 23-26 (sdrplay mypy fix, RNNoise AudioWorklet, SDRangel REST+WS, FT8 demod) were still pending, but git log shows all four were actually committed during the prior session:
+  * 0662907 slice-23: sdrplay mypy --strict fix + bootstrap-venv.sh tooling
+  * cc68991 slice-24: RNNoise AudioWorkletProcessor (closes slice-19)
+  * b8b1d04 slice-25: SDRangel REST+WS streaming v1 (closes slice-20)
+  * 29ee618 fix(slice-25): ruff cleanups for sdrangel tests
+  * 3e88175 slice-26: FT8 FSK demod + CRC-14 + standard message unpack (closes slice-21)
+  * 6800d05 fix(slice-23): remove unused type: ignore comments (cffi callbacks) — slice-23b followup
+- Initial attempt: ran `uv run mypy --strict openwebrx_plus/sources/sdrplay.py` which triggered an inadvertent `uv sync` rebuild attempt (pycsdr from source fails on missing libcsdr dev headers in env). Per docs/AI-HANDOFF.md §8 landmine, NEVER use `uv run` after env restore — invoke `.venv/bin/mypy` directly.
+- CLI `mypy --strict` (which OVERRIDES pyproject's `disallow_untyped_decorators = false`) reported 2 errors at sdrplay.py lines 193/207 (the cffi.callback decorators). Attempted fix: re-add `# type: ignore[untyped-decorator]` per handoff §5.1.
+- REALIZED this would REGRESS CI: slice-23b (commit 6800d05) deliberately REMOVED these comments because they're flagged as "unused type: ignore" under CI's invocation (`uv run mypy openwebrx_plus` reads pyproject.toml where disallow_untyped_decorators=false). The comments were only useful under CLI --strict which CI doesn't use.
+- REVERTED sdrplay.py to HEAD (no comments) — matches slice-23b's deliberate state.
+- Verified CI's actual mypy invocation: `mypy openwebrx_plus` → Success, no issues found in 59 source files.
+- Verified ruff: `ruff check .` → All checks passed!
+- Verified server pytest: 491 passed, 1 skipped (84% coverage, ~82 s; up from prior-session 466 baseline because slice-26 added 25 FT8 tests — matches worklog).
+- Discovered a real maintenance gap: pyproject.toml declared `tomli_w>=1.0.0` since slice-X (used in `openwebrx_plus/config/user_settings.py` for TOML round-trip) but uv.lock was never re-synced — initial import lock file did NOT include tomli-w despite the env having it installed (1.2.0). My inadvertent `uv sync` computed the correct lock — keeping that change.
+- Confirmed tomli_w 1.2.0 is installed in venv: `import tomli_w; print(tomli_w.__version__)` → 1.2.0.
+
+Stage Summary:
+- Prior-session roadmap items (slices 23-26) verified ALL complete and pushed. Summary was stale; no new code work needed for those slices.
+- Single real fix this session: sync `apps/server/uv.lock` to declare `tomli-w` (closes a long-standing pyproject-vs-lock drift; the env already had it installed, the lock just didn't reflect reality).
+- All quality gates green under CI's actual invocations:
+  * mypy openwebrx_plus (CI invocation): Success, no issues in 59 source files
+  * ruff check .: All checks passed!
+  * server pytest: 491 passed, 1 skipped
+  * web vitest/tsc/vite/build: unchanged from prior green baseline (not touched this session)
+- Next-up roadmap per docs/AI-HANDOFF.md §5 mid/long-term: FLDIGI/RTTY/PSK31 siblings, frontend 'WRSF' viz (channel-scope waterfall), propagation intelligence, mobile layout, Docker deployment, FT8 v2 (LDPC sum-product + Costas + 6-char callsigns + i3≠0 message types), DeepFilterNet weights + upstream crate.
