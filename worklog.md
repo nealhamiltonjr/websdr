@@ -421,3 +421,91 @@ eslint clean.
 is shipped; once the demod produces events, the viz populates
 automatically. FLDIGI virtual audio cable integration is also open
 (operators can run FLDIGI locally today).
+
+---
+## sync-22 (2026-08-28): git sync verification + CI green audit
+
+**Goal:** verify the repo is fully synced to the remote and all GitHub
+Actions workflows complete without errors. The user reported "some
+workflows fail" based on the historical Actions record.
+
+**Work Log:**
+- Inspected git state: local HEAD `906be15` (auto-commit with GUID
+  message — `e5c3a024-7a5c-470e-8fdd-0bb41fe13dce`) was 2 commits
+  ahead of `origin/main` (`a76a04e1`).
+- The auto-commit `906be15` had bundled the 184 MB handoff ZIP into
+  git history — that would fail GitHub's 100 MB file limit on push.
+- Backup up the ZIP to `/tmp/...bak`, then `git reset --soft a76a04e`
+  to roll back the GUID commits while keeping all changes staged.
+- Added `download/` to `.gitignore` (was missing — agent working
+  artifacts pattern; matches `skills/`, `tool-results/`, `upload/`).
+- Re-committed the pending work in TWO clean, meaningful commits
+  (replacing the GUID-message auto-commits):
+  1. `81a0be3` `slice-22: secondary FFT wire format for federation
+     polish` — the real code work: `RemoteSecondaryFftFrame` dataclass
+     + `SecondaryFFTFrame` TS wire format (magic 'WRSF') + decode
+     Type 0x03 secondary FFT frames in `openwebrx_remote.py` +
+     `_pack_secondary_fft_frame()` in `ReceiverSession` + 214 lines
+     of new tests. Closes the slice-14 STATUS.md open item
+     "secondary-demod forwarding for openwebrx_remote".
+  2. `361eada` `docs: handoff bundle + status snapshot through slice-22`
+     — the docs + tooling: rewritten `docs/AI-HANDOFF.md` (35 KB, fully
+     updated for slices 15-22), `docs/STATUS.md` slice-15-22 addendum,
+     new `scripts/build-handoff-zip.sh` (persistent zip builder),
+     `.gitignore` update.
+- Pushed via PAT-strip protocol per `SYNC-UP.md`: temporarily inserted
+  PAT into remote URL → `git push origin main` (pushed `a76a04e..361eada`)
+  → immediately stripped PAT back to plain HTTPS URL.
+- Verified sync: `git ls-remote origin refs/heads/main` returns
+  `361eadaa810441c7aaf2eddb07483322e187ce7e` — matches local HEAD.
+
+**CI Audit (per `GET /repos/nealhamiltonjr/websdr/actions/runs`):**
+- Total runs in the API record: 36.
+- **5 historical failures identified:**
+  - Run #31 (slice-18, sha=5afd1432) — Rust module compile errors
+    (private config field, use-after-move, float32 noise threshold).
+    Fixed by commit `cc76fa21` ("fix(slice-18): Rust fixes…"); Run #32
+    was success.
+  - Runs #19-22 (slices 9-11 + the slice-10 test fix) — iterative
+    fixes around the AI cascade + OffscreenCanvas + vitest 3.x
+    migration. Slice-12 ("vitest 3.x + typescript-eslint unified +
+    libcsdr CI cache") was the consolidating fix; Run #23 onward
+    is consistently green.
+- All 5 historical failures are TRANSIENT (each immediately resolved
+  by the next commit). The most recent 7 runs (slice-15 through the
+  current docs commit) are all `conclusion: success`.
+- **Run #36 (this push) — ALL 5 CI JOBS GREEN in 2.5 minutes:**
+  - AI (packages/ai-rust): success (22 s)
+  - Backend (apps/server): success (~2.5 min; builds libcsdr from
+    source on cache miss, runs `uv sync`, bakes IQ fixtures, runs
+    `ruff check`, `mypy openwebrx_plus`, `pytest`)
+  - DSP (packages/dsp-zig): success (19 s)
+  - Frontend (apps/web): success (23 s)
+  - Shared Types (packages/shared-types): success (14 s)
+- Note: the CI server job runs `mypy openwebrx_plus` (NOT `--strict`)
+  so the 2 known `--strict`-only errors in `sources/sdrplay.py`
+  (cffi callback untyped-decorator) don't break CI. The local strict
+  gate has them as known regressions per `docs/AI-HANDOFF.md` §4 + §5.1.
+
+**Stage Summary:**
+- Sync: verified — local HEAD `361eadaa` == `origin/main` `361eadaa`.
+- Workflows: all 5 jobs in the most recent run completed successfully.
+- Historical failures all accounted for (each resolved by the next
+  commit); the "some workflows fail" state is no longer current.
+- Bonus: cleaned up the GUID-message auto-commit pattern, restored
+  the slice-22 code (real federation polish — secondary FFT wire
+  format) as a proper named commit. The handoff bundle ZIP itself
+  lives in `download/` (gitignored, not tracked — operator can
+  regenerate via `scripts/build-handoff-zip.sh`).
+
+**Next-up tier (per `docs/AI-HANDOFF.md` §5):**
+1. sdrplay mypy --strict fix (5-minute hygiene win — `# type:
+   ignore[untyped-decorator]` on two cffi callbacks).
+2. FT8 demodulator + LDPC + CRC-14 + message unpack (closes the
+   slice-21 stub; 2-3 days for v1).
+3. RNNoise AudioWorklet integration (closes the slice-19 loader;
+   half a day).
+4. SDRangel REST+WS streaming implementation (closes the slice-20
+   scaffold; 1-2 days for v1).
+5. DeepFilterNet weights + upstream crate (closes the slice-18
+   scaffold; half a day code, weights licensing review adds time).
