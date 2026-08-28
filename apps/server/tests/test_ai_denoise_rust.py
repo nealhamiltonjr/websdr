@@ -92,3 +92,75 @@ def test_construct_works_when_available() -> None:
     assert d.frame_size == 480
     # The handle must be non-null.
     assert d._handle is not None
+
+
+def test_feed_returns_int16() -> None:
+    """feed() must return an int16 numpy array (the wire format)."""
+    import numpy as np
+
+    from openwebrx_plus.dsp.ai_denoise_rust import AVAILABLE, RustAIDenoiser
+
+    if not AVAILABLE:
+        pytest.skip("cdylib not built — skip feed test")
+    d = RustAIDenoiser(frame_size=480)
+    # Feed 5 frames (2400 samples) so the overlap-add ramps up.
+    t = np.arange(2400) / 8000.0
+    tone = (0.5 * np.sin(2 * np.pi * 1000 * t) * 32767).astype(np.int16)
+    out = d.feed(tone)
+    assert out.dtype == np.int16
+    assert out.ndim == 1
+
+
+def test_feed_multi_frame_produces_nonzero_output() -> None:
+    """After enough frames for overlap-add to ramp up, the output
+    must have non-zero energy (the denoiser passes a clean tone
+    through, just attenuated by spectral subtraction)."""
+    import numpy as np
+
+    from openwebrx_plus.dsp.ai_denoise_rust import AVAILABLE, RustAIDenoiser
+
+    if not AVAILABLE:
+        pytest.skip("cdylib not built — skip multi-frame test")
+    d = RustAIDenoiser(frame_size=480)
+    # Feed 10 frames (4800 samples = 10 hops) of a 1 kHz tone.
+    t = np.arange(4800) / 8000.0
+    tone = (0.5 * np.sin(2 * np.pi * 1000 * t) * 32767).astype(np.int16)
+    out = d.feed(tone)
+    energy = float(np.sum(out.astype(np.float64) ** 2))
+    assert energy > 0.0, f"multi-frame output should be non-zero, got energy {energy}"
+
+
+def test_feed_silence_returns_near_zero() -> None:
+    """Feeding silence should produce near-zero output (the spectral
+    floor gates the output to zero when |X_noisy| = 0)."""
+    import numpy as np
+
+    from openwebrx_plus.dsp.ai_denoise_rust import AVAILABLE, RustAIDenoiser
+
+    if not AVAILABLE:
+        pytest.skip("cdylib not built — skip silence test")
+    d = RustAIDenoiser(frame_size=480)
+    silence = np.zeros(4800, dtype=np.int16)
+    out = d.feed(silence)
+    energy = float(np.sum(out.astype(np.float64) ** 2))
+    assert energy < 1.0, f"silence output should be near-zero, got energy {energy}"
+
+
+def test_reset_clears_state() -> None:
+    """reset() must clear internal buffers so subsequent frames start fresh."""
+    import numpy as np
+
+    from openwebrx_plus.dsp.ai_denoise_rust import AVAILABLE, RustAIDenoiser
+
+    if not AVAILABLE:
+        pytest.skip("cdylib not built — skip reset test")
+    d = RustAIDenoiser(frame_size=480)
+    # Feed some signal to populate state.
+    t = np.arange(4800) / 8000.0
+    tone = (0.5 * np.sin(2 * np.pi * 1000 * t) * 32767).astype(np.int16)
+    d.feed(tone)
+    # Reset should not raise and should clear the buffer.
+    d.reset()
+    # After reset, the buffer should be empty — drain returns empty.
+    drained = d.drain()
+    assert drained.size == 0 or float(np.sum(drained.astype(np.float64) ** 2)) < 1.0

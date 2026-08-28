@@ -40,6 +40,8 @@ import structlog
 
 from ..config import Settings
 from ..dsp import AIDenoiser, AIDenoiserConfig, AudioChain, DSPParams, FftChain, IQPreprocessor
+from ..dsp.ai_denoise_rust import RustAIDenoiser
+from ..dsp.ai_denoise_rust import is_available as rust_denoiser_available
 from ..plugins.base import (
     DecoderAlreadyAttached,
     DecoderAttachContext,
@@ -150,7 +152,7 @@ class ReceiverSession:
     # Slice-10: AI denoiser (Stage 2a of ADR-002 cascade). Instantiated
     # lazily when dsp_mode is first set to 'ai' or 'cascade'; reset on
     # mode/source change so the noise-floor estimate starts fresh.
-    _ai_denoiser: AIDenoiser | None = field(default=None, init=False)
+    _ai_denoiser: AIDenoiser | RustAIDenoiser | None = field(default=None, init=False)
     _hub: IqHub | None = field(default=None, init=False)
     _decoders: dict[str, _DecoderAttachment] = field(default_factory=dict, init=False)
     # Serializes chain swaps (set_mode / set_dsp_mode / stop) against the
@@ -620,9 +622,19 @@ class ReceiverSession:
             # avoids the noise-floor estimate carrying stale samples.
             if mode in ("ai", "cascade"):
                 if self._ai_denoiser is None:
-                    self._ai_denoiser = AIDenoiser(
-                        config=AIDenoiserConfig(sample_rate=AUDIO_SAMPLE_RATE)
-                    )
+                    # Slice-36: prefer the Rust cdylib when built; fall
+                    # back to the pure-numpy AIDenoiser when not. Both
+                    # share the same feed/drain/reset API.
+                    if rust_denoiser_available():
+                        self._ai_denoiser = RustAIDenoiser(
+                            frame_size=480  # RNNoise-compatible
+                        )
+                        log.info("ai denoiser: rust cdylib (native)")
+                    else:
+                        self._ai_denoiser = AIDenoiser(
+                            config=AIDenoiserConfig(sample_rate=AUDIO_SAMPLE_RATE)
+                        )
+                        log.info("ai denoiser: numpy (fallback)")
                 else:
                     self._ai_denoiser.reset()
             else:
