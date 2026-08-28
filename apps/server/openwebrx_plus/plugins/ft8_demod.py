@@ -65,6 +65,8 @@ COSTAS_POSITIONS = (
 )
 DATA_POSITIONS = [i for i in range(FT8_SYMBOLS_PER_SLOT) if i not in COSTAS_POSITIONS]
 # 58 data positions × 3 bits = 174 bits LDPC codeword
+# Set form for O(1) "in" lookup (used by detect_symbols_soft).
+_DATA_POSITIONS_SET: set[int] = set(DATA_POSITIONS)
 
 # The baseline FT8 tone (Hz). WSJT-X uses 1500 Hz as the FT8 audio center.
 # Tone k = baseline + k * FT8_TONE_SPACING_HZ for k = 0..7.
@@ -142,6 +144,115 @@ def detect_symbols(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         # Pick the strongest tone.
         symbols[i] = int(np.argmax(mags))
     return symbols
+
+
+# Bit pattern for each FT8 tone (tone value 0..7 → 3-bit pattern MSB-first).
+_TONE_BIT_PATTERNS: list[tuple[int, int, int]] = [
+    (0, 0, 0),  # tone 0
+    (0, 0, 1),  # tone 1
+    (0, 1, 0),  # tone 2
+    (0, 1, 1),  # tone 3
+    (1, 0, 0),  # tone 4
+    (1, 0, 1),  # tone 5
+    (1, 1, 0),  # tone 6
+    (1, 1, 1),  # tone 7
+]
+
+
+def detect_symbols_soft(
+    audio: np.ndarray, sample_rate: int
+) -> tuple[np.ndarray, list[float]]:
+    """Detect FT8 symbols with soft (LLR) output — slice-29 v2.1.
+
+    Returns both the hard symbol decisions (same as :func:`detect_symbols`)
+    AND a list of 174 per-bit log-likelihood ratios for the LDPC
+    sum-product decoder. The hard decisions are the v1 path (retained
+    for backward compatibility + as the fallback when LDPC fails);
+    the soft LLRs feed :func:`ft8_ldpc.decode_ldpc` for the v2.1
+    soft-decision path that gives ~3 dB SNR improvement.
+
+    LLR derivation (one-of-8 symbol → per-bit LLR):
+
+      For each symbol period, we have 8 tone magnitudes m[0..7].
+      Tone k encodes 3 bits (MSB, mid, LSB) per _TONE_BIT_PATTERNS.
+      The soft "probability" of tone k is proportional to m[k]
+      (treat magnitude as a non-normalized likelihood).
+
+      For bit position p (0=MSB, 1, 2=LSB):
+        P(bit p = 1) = sum over k where _TONE_BIT_PATTERNS[k][p] == 1 of m[k]
+        P(bit p = 0) = sum over k where _TONE_BIT_PATTERNS[k][p] == 0 of m[k]
+
+      LLR(p) = log(P(bit p = 1) / P(bit p = 0))
+
+      Sign convention: positive LLR → bit is more likely 0 (P(0) > P(1));
+      negative LLR → bit is more likely 1. This matches the LDPC decoder's
+      convention. The magnitude is the log-ratio of the two probabilities
+      (higher = more confident).
+
+      We use magnitude (not magnitude-squared) as the soft weight — this
+      is the standard non-coherent FSK soft-decision derivation. Adding a
+      tiny epsilon (1e-12) prevents log(0) when one side is zero.
+
+      Costas sync symbols (21 of 79) are NOT data — they don't contribute
+      LLRs. Only the 58 data positions produce LLRs (3 bits each → 174
+      total). The LLR list order matches the LDPC codeword bit order
+      (DATA_POSITIONS × 3 bits MSB-first per symbol) — see
+      :func:`symbols_to_bits` for the matching convention.
+
+    Args:
+        audio: float32 PCM, mono, length >= FT8_SLOT_SAMPLES.
+        sample_rate: must be 12_000.
+
+    Returns:
+        (hard_symbols, soft_llrs) where:
+          - hard_symbols is np.int8, length 79 (same as detect_symbols).
+          - soft_llrs is a list of 174 floats (one per LDPC codeword bit,
+            MSB-first per symbol, in DATA_POSITIONS order).
+
+    Raises:
+        ValueError if sample_rate != FT8_SAMPLE_RATE or audio is too short.
+    """
+    if sample_rate != 12_000:
+        raise ValueError(
+            f"FT8 demod requires 12 kHz audio, got {sample_rate}."
+        )
+    n = min(len(audio), FT8_SLOT_SAMPLES)
+    if n < FT8_SLOT_SAMPLES:
+        return np.zeros(0, dtype=np.int8), []
+
+    hard_symbols = np.zeros(FT8_SYMBOLS_PER_SLOT, dtype=np.int8)
+    soft_llrs: list[float] = []
+    epsilon = 1e-12
+
+    for i in range(FT8_SYMBOLS_PER_SLOT):
+        start = i * FT8_SYMBOL_SAMPLES
+        end = start + FT8_SYMBOL_SAMPLES
+        chunk = audio[start:end]
+        mags = np.zeros(8, dtype=np.float64)
+        for k in range(8):
+            freq = FT8_BASELINE_TONE_HZ + k * 6.25
+            mags[k] = float(goertzel_magnitude(chunk, freq, sample_rate))
+        # Hard decision: argmax tone.
+        hard_symbols[i] = int(np.argmax(mags))
+        # Soft LLRs only for data symbols (skip Costas positions — they
+        # don't contribute to the LDPC codeword).
+        if i in _DATA_POSITIONS_SET:
+            for p in range(3):  # 3 bit positions: MSB, mid, LSB
+                p_bit1 = sum(
+                    mags[k] for k in range(8) if _TONE_BIT_PATTERNS[k][p] == 1
+                )
+                p_bit0 = sum(
+                    mags[k] for k in range(8) if _TONE_BIT_PATTERNS[k][p] == 0
+                )
+                # LLR = log(P(bit=1) / P(bit=0)). Positive → bit likely 0
+                # (P(0) > P(1)); negative → bit likely 1. Matches the
+                # LDPC decoder's hard-decision convention (bit = 1 if LLR<0).
+                llr = float(np.log((p_bit1 + epsilon) / (p_bit0 + epsilon)))
+                # Note: our LDPC decoder expects "positive LLR → bit likely 0"
+                # which means LLR = log(P(0)/P(1)) = -log(P(1)/P(0)).
+                # So we negate the formula above.
+                soft_llrs.append(-llr)
+    return hard_symbols, soft_llrs
 
 
 def symbols_to_bits(symbols: np.ndarray) -> np.ndarray:

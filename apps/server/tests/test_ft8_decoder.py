@@ -76,36 +76,40 @@ def test_plugin_manifest_fields() -> None:
     p = FT8DecoderPlugin()
     m = p.manifest
     assert m.name == "ft8"
-    assert m.version == "0.3.0"  # bumped: 0.1.0 (stub) → 0.2.0 (v1) → 0.3.0 (v2 LDPC)
+    assert m.version == "0.3.1"  # 0.1.0 (stub) → 0.2.0 (v1) → 0.3.0 (v2 LDPC) → 0.3.1 (v2.1 soft LDPC wired)
     assert m.tap_point == "rf_band"
     assert m.required_sample_rate == FT8_SAMPLE_RATE
     assert "message" in m.events
     assert "messages" in m.events
     assert "FT8" in m.label
-    # Description must clearly state v2 status + the LDPC improvements.
-    assert "slice-28" in m.description.lower()
-    assert "v2" in m.description.lower()
+    # Description must clearly state v2.1 status (soft LDPC wired).
+    assert "slice-29" in m.description.lower()
+    assert "v2.1" in m.description.lower()
     assert "ldpc" in m.description.lower()
-    assert "syndrome" in m.description.lower()
+    assert "soft" in m.description.lower()
 
 
-def test_plugin_status_reports_v2_state() -> None:
-    """status() reports zero counters + the v2 simplifications list."""
+def test_plugin_status_reports_v2_1_state() -> None:
+    """status() reports zero counters + the v2.1 simplifications list."""
     p = FT8DecoderPlugin()
     s = p.status()
     assert s["messages_decoded"] == 0
     assert s["crc_failures"] == 0
-    assert s["syndrome_failures"] == 0  # v2 new counter
+    assert s["syndrome_failures"] == 0  # v2 counter
+    assert s["soft_decode_success"] == 0  # v2.1 new
+    assert s["soft_decode_fallback"] == 0  # v2.1 new
     assert s["slot_count"] == 0
     assert s["stub"] is False
-    assert s["version"] == "0.3.0"
-    # v2 simplifications reflect remaining limitations (Costas, soft-wire,
-    # 6-char callsigns, i3!=0).
-    assert "no_costas_loop" in s["v2_simplifications"]
-    assert "sum_product_ldpc_not_wired" in s["v2_simplifications"]
-    assert "i3_only_0" in s["v2_simplifications"]
-    assert "5char_callsigns" in s["v2_simplifications"]
-    assert "slice-28 v2" in s["note"]
+    assert s["version"] == "0.3.1"
+    # v2.1 simplifications reflect remaining limitations (no longer
+    # includes "sum_product_ldpc_not_wired" — it IS wired now).
+    assert "no_costas_loop" in s["v2_1_simplifications"]
+    assert "i3_only_0" in s["v2_1_simplifications"]
+    assert "5char_callsigns" in s["v2_1_simplifications"]
+    # Specifically, the "sum_product_ldpc_not_wired" simplification
+    # from v2.0 has been removed (the decoder IS wired now in v2.1).
+    assert "sum_product_ldpc_not_wired" not in s["v2_1_simplifications"]
+    assert "slice-29 v2.1" in s["note"]
 
 
 def test_ft8_constants_match_protocol_spec() -> None:
@@ -635,8 +639,7 @@ def test_snapshot_event_emitted_alongside_message() -> None:
 
 
 def test_status_reflects_decode_count_after_decodes() -> None:
-    """After decoding, status() reflects the new counts (v2: also reports
-    syndrome_failures)."""
+    """After decoding, status() reflects the new counts (v2 + v2.1 counters)."""
     audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
     pcm = (audio * 32767).astype(np.int16)
     plugin = FT8DecoderPlugin()
@@ -649,10 +652,14 @@ def test_status_reflects_decode_count_after_decodes() -> None:
     # v2: syndrome_failures counter exists (will be 0 for a clean signal;
     # would be >0 if fed garbage that failed the LDPC syndrome check).
     assert s["syndrome_failures"] >= 0
+    # v2.1: soft-decode counters. On a clean synthesized signal, the
+    # soft LDPC path should converge → soft_decode_success > 0.
+    assert s["soft_decode_success"] >= 1
+    assert s["soft_decode_fallback"] == 0  # no fallback on clean signal
 
 
 def test_stop_resets_state() -> None:
-    """stop() clears all streaming state (v2: includes syndrome_failures)."""
+    """stop() clears all streaming state (v2 + v2.1 counters)."""
     audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
     pcm = (audio * 32767).astype(np.int16)
     plugin = FT8DecoderPlugin()
@@ -663,3 +670,76 @@ def test_stop_resets_state() -> None:
     assert s["slot_count"] == 0
     assert s["crc_failures"] == 0
     assert s["syndrome_failures"] == 0
+    assert s["soft_decode_success"] == 0
+    assert s["soft_decode_fallback"] == 0
+
+
+# ============================================================================
+# Slice-29 v2.1: soft FSK demod → sum-product LDPC wired as primary path
+# ============================================================================
+
+def test_soft_demod_produces_174_llrs_for_clean_signal() -> None:
+    """detect_symbols_soft returns 174 soft LLRs (one per LDPC codeword bit)."""
+    from openwebrx_plus.plugins.ft8_demod import detect_symbols_soft
+
+    audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
+    hard_syms, soft_llrs = detect_symbols_soft(audio, 12_000)
+    assert len(hard_syms) == 79
+    assert len(soft_llrs) == 174
+    # All LLRs should be finite (no NaN / inf from log(0)).
+    assert all(llr == llr for llr in soft_llrs), "no NaN in LLRs"
+    assert all(abs(llr) != float("inf") for llr in soft_llrs), "no inf in LLRs"
+
+
+def test_soft_demod_hard_decisions_match_detect_symbols() -> None:
+    """The hard symbols returned by detect_symbols_soft match detect_symbols."""
+    from openwebrx_plus.plugins.ft8_demod import detect_symbols, detect_symbols_soft
+
+    audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
+    hard_only = detect_symbols(audio, 12_000)
+    hard_from_soft, _ = detect_symbols_soft(audio, 12_000)
+    assert np.array_equal(hard_only, hard_from_soft)
+
+
+def test_plugin_uses_soft_ldpc_path_on_clean_signal() -> None:
+    """Slice-29 v2.1: on a clean synthesized signal, the soft LDPC path
+    is the primary decode path (soft_decode_success > 0,
+    soft_decode_fallback == 0)."""
+    audio = synthesize_audio("K1ABC", "KO51", "-12", i3=0, sample_rate=12_000)
+    pcm = (audio * 32767).astype(np.int16)
+    plugin = FT8DecoderPlugin()
+    events = plugin.feed_audio(pcm, FT8_SAMPLE_RATE)
+    s = plugin.status()
+    # The soft LDPC path should have converged on the clean signal.
+    assert s["soft_decode_success"] >= 1, (
+        "soft LDPC should converge on clean signal — soft_decode_success "
+        f"should be > 0, got {s['soft_decode_success']}"
+    )
+    # No fallback to hard path expected on a clean signal.
+    assert s["soft_decode_fallback"] == 0
+    # And the message should still decode (same as v2 path).
+    message_events = [e for e in events if e.get("kind") == "message"]
+    assert len(message_events) >= 1
+    assert message_events[0]["callsign"] == "K1ABC"
+
+
+def test_plugin_silence_does_not_produce_decodes_v2_1() -> None:
+    """Slice-29 v2.1: silence (all-zero audio) doesn't produce decodes
+    even though the all-zero codeword is a valid LDPC codeword."""
+    pcm = np.zeros(FT8_SLOT_SAMPLES, dtype=np.int16)
+    plugin = FT8DecoderPlugin()
+    events = plugin.feed_audio(pcm, FT8_SAMPLE_RATE)
+    assert events == []
+    s = plugin.status()
+    # Slot was processed (counter incremented).
+    assert s["slot_count"] >= 1
+    # No messages decoded from silence.
+    assert s["messages_decoded"] == 0
+
+
+def test_plugin_soft_demod_wrong_sample_rate_returns_empty() -> None:
+    """detect_symbols_soft + plugin.feed_audio reject non-12 kHz audio."""
+    plugin = FT8DecoderPlugin()
+    pcm = np.zeros(FT8_SLOT_SAMPLES, dtype=np.int16)
+    events = plugin.feed_audio(pcm, 48_000)  # wrong rate
+    assert events == []
