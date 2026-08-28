@@ -1347,3 +1347,23 @@ Stage Summary:
 - Decoder count: 6 → 8 (added RTTY + PSK31, both audio-band in-process Python).
 - The AI cascade is now natively accelerated when the Rust cdylib is built (slice-36 closes the gap between packages/ai-rust and apps/server).
 - All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
+
+---
+Task ID: 40-42
+Agent: super-z (main agent)
+Task: Three-slice autonomous sprint — SSTV decoder, Olivia decoder, frontend decoder type registry.
+
+Work Log:
+- Slice 40: SSTV decoder — sstv_demod.py (FM-based demodulator with VIS leader detection, VIS code reading, scanline decoding via frequency-to-pixel mapping 1500 Hz=black to 2300 Hz=white; supports Scottie 1/2, Martin 1/2, Robot 36), sstv.py (plugin emitting 'image'/'scanline'/'mode' events). 17 new tests. Rebuilt libcsdr + pycsdr from source (sandbox reset had evicted them). Server tests: 581 → 598.
+- Slice 41: Olivia MFSK decoder — olivia_demod.py (32-tone Goertzel detector at 1000 Hz bandwidth, 31.25 baud, center 1500 Hz), olivia_protocol.py (symbol-to-ASCII decoder, 5-bit symbols MSB-first into 7-bit chars), olivia.py (plugin). 17 new tests. Server tests: 598 → 615.
+- Slice 42: Frontend decoder type registry — added TEXT_DECODERS (cw, rtty, psk31, olivia) + IMAGE_DECODERS (sstv) to packages/shared-types/src/decoder.ts with type guards (isTextCharEvent, isTextSnapshotEvent, isImageEvent, isImageScanlineEvent, isImageModeEvent) + interfaces. 17 new web tests in decoder-types.test.ts. Web tests: 178 → 195.
+- Each slice: ran full quality gates (server tests, ruff, mypy strict, web tests, tsc, eslint, vite build), ran E2E smoke, committed, pushed via PAT-strip pattern, verified sync.
+- All slices pushed to origin/main: 964946b (slice-40) → 442d1c3 (slice-41) → 3b388ea (slice-42).
+
+Stage Summary:
+- Three slices shipped: SSTV decoder (slice-40), Olivia decoder (slice-41), frontend type registry (slice-42).
+- Server test count: 581 → 615 (+34 new tests).
+- Web test count: 178 → 195 (+17 new tests).
+- Decoder count: 8 → 10 (added SSTV + Olivia; RTTY + PSK31 were slices 38-39).
+- The frontend now has type-safe decoder family classification for all 10 decoders.
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
