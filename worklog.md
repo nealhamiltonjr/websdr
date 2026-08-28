@@ -1387,3 +1387,24 @@ Stage Summary:
 - Decoder count: 10 → 12 (added WSPR + AX.25).
 - Frontend viz count: 9 → 10 (added TextStreamViz).
 - All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
+
+---
+Task ID: 46-48
+Agent: super-z (main agent)
+Task: Three-slice autonomous sprint — ImageViz frontend, JT65 decoder, decoder type registry expansion.
+
+Work Log:
+- Slice 46: ImageViz frontend component — imageVizModel.ts (pure-logic model with applyDecoderEvent for image/scanline/mode events, decodeBase64ToBytes, progressPercent with mode-specific heights), ImageViz.tsx (canvas-based renderer using putImageData with RGB→RGBA conversion, progress bar during decoding, mode badge, image dimensions). 20 new web tests. Web tests: 210 → 230.
+- Slice 47: JT65 decoder — jt65_demod.py (65-tone MFSK Goertzel at 2.6917 Hz spacing, 126-symbol transmissions), jt65_protocol.py (sync-tone stripping at positions 2,6,...,62; 6-bit symbol↔bit conversion; 72-bit payload unpack: callsign1 28b + callsign2 28b + grid/report 15b + flag 1b; grid/report encoding supports both Maidenhead grids and dB reports), jt65.py (plugin emitting message/progress events). 18 new tests. Server tests: 651 → 669.
+- Slice 48: Frontend decoder type registry expansion — DIGI_MESSAGE_DECODERS expanded to ['ft8','wspr','jt65'], new PACKET_DECODERS family ['ax25'] with PacketEvent + PacketCrcErrorEvent interfaces + isPacketEvent + isPacketCrcErrorEvent type guards. 6 new web tests. Web tests: 230 → 236.
+- Each slice: ran full quality gates (server tests, ruff, mypy strict, web tests, tsc, eslint, vite build), ran E2E smoke, committed, pushed via PAT-strip pattern, verified sync.
+- All slices pushed to origin/main: e89ad0f (slice-46) → d389237 (slice-47) → 2b4f95b (slice-48).
+
+Stage Summary:
+- Three slices shipped: ImageViz frontend (slice-46), JT65 decoder (slice-47), type registry expansion (slice-48).
+- Server test count: 651 → 669 (+18 new tests).
+- Web test count: 230 → 236 (+6 new tests).
+- Decoder count: 12 → 13 (added JT65).
+- Frontend viz count: 10 → 11 (added ImageViz).
+- The DigiMessageListViz now renders FT8 + WSPR + JT65 messages; ImageViz renders SSTV images; TextStreamViz renders CW/RTTY/PSK31/Olivia text. All 13 decoders have frontend type coverage.
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
