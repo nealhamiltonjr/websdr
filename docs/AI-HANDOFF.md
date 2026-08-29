@@ -1,6 +1,6 @@
 # OpenWebRX+ — Complete Project Handoff (for an AI continuing this work)
 
-**Snapshot date:** 2026-08-29 · **State:** post slice-35 (SDRangel audio-over-UDP-sink + real `set_mode()` — closes the slice-25 "spectrum-only v1" limitation) · **All quality gates green** (538 server tests + 178 web tests; one known `mypy --strict` CLI artifact documented in §4/§5.1, NOT a CI failure)
+**Snapshot date:** 2026-08-29 · **State:** post slice-53 (DAB FIC decoder — 17 decoders total) · **All quality gates green** (728 server tests + 255 web tests; one known `mypy --strict` CLI artifact documented in §4/§5.1, NOT a CI failure)
 
 This document is the single entry point for an AI (or human) picking this
 project up cold. It explains what the project is, the tech stack, exactly

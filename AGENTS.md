@@ -42,8 +42,8 @@ and `docs/STATUS.md` (living status snapshot).
 
 ```bash
 # from the repo root
-scripts/run-server-tests.sh                              # 542+ tests, ~90 s
-cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit  # 178+ tests, types
+scripts/run-server-tests.sh                              # 728+ tests, ~85 s
+cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit  # 255+ tests, types
 cd apps/web && pnpm run build                            # vite production build
 cd apps/server && .venv/bin/ruff check .                 # lint clean
 cd apps/server && .venv/bin/mypy openwebrx_plus         # strict types clean
@@ -60,7 +60,8 @@ apps/server/openwebrx_plus/
   dsp/         pycsdr chains: FftChain (FFT wire format) + AudioChain (6 modes)
                 + ai_denoise.py (numpy Stage 2a) + ai_denoise_rust.py (Rust cdylib, slice-36)
   sessions/    ReceiverSession (IQ + display-stream paths) + SessionRegistry
-  plugins/     DecoderPlugin ABC + adsb/ais/dump978/cw/ft8 (in-process) + dump1090 (subprocess)
+  plugins/     DecoderPlugin ABC + 17 decoders: adsb/ais/cw/dump978/dump1090/ft8/
+               rtty/psk31/sstv/olivia/wspr/ax25/jt65/jt9/fax/acars/dab (in-process)
   api/         rest.py (control) + ws.py (streams) — binary FFT/audio frames
   config/      Settings (TOML + env via pydantic-settings)
   observability/  structlog setup
@@ -118,8 +119,8 @@ Open follow-ups:
 - <deferred item, if any>
 
 Quality gates:
-- server: 542/542 tests, mypy strict, ruff clean
-- web: 178/178 tests, tsc clean, vite build clean
+- server: 728/728 tests, mypy strict, ruff clean
+- web: 255/255 tests, tsc clean, vite build clean
 ```
 
 ## When you don't know what to do
