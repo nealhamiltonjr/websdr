@@ -1,6 +1,6 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-29, post slice-35 (SDRangel audio-over-UDP-sink + real `set_mode()` — closes the slice-25 "spectrum-only v1" limitation; SDRangel sources with `audio_enabled=True` now configure a demod channel's UDP sink to stream int16 mono PCM to a local listener, yielding interleaved `RemoteAudioFrame` chunks alongside the FFT frames; `set_mode()` swaps the demod channel via DELETE+POST+PUT)
+**Updated:** 2026-08-29, post slice-58 (18 decoders, 740+1 server tests, 275 web tests, 13 frontend viz)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
 **Companion:** `ADR/` for decision records; `docs/AI-HANDOFF.md` for the authoritative handoff (this file's snapshots are slice-14-detailed; slices 15-35 are summarized in the §"Delivery history addendum" below and fully documented in `docs/AI-HANDOFF.md` §4 and `worklog.md`).
 

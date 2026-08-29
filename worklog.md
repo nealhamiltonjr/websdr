@@ -1447,3 +1447,26 @@ Stage Summary:
 - Decoder count: 15 → 17 (added ACARS + DAB).
 - Docs now honestly reflect the post-slice-53 state: 17 decoders, 728+1 server tests, 255 web tests, 12 frontend viz components, native Rust AI acceleration.
 - All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
+
+---
+Task ID: 55-58
+Agent: super-z (main agent)
+Task: Four-slice autonomous sprint — ATC decoder, DabServiceListViz, type registry expansion, JT9/FAX registry.
+
+Work Log:
+- Slice 55: ATC voice activity detector — atc_demod.py (RSSI-based squelch with debounce + hang time + periodic RSSI reporting), atc.py (plugin emitting voice_start/voice_end/rssi events). 12 new tests. Server tests: 728 → 740.
+- Slice 56: DabServiceListViz frontend component — dabServiceListModel.ts (pure-logic model with service add/update by ID, ensemble tracking), DabServiceListViz.tsx (scrollable table with label/SId/PTy). 8 new web tests. Web tests: 255 → 263. 13th viz component.
+- Slice 57: ACARS + DAB + ATC frontend type registry — added ACARS_DECODERS, DAB_DECODERS, ATC_DECODERS with full event interfaces + type guards (isAcarsMessageEvent, isAcarsCrcErrorEvent, isDabServiceEvent, isDabEnsembleEvent, isAtcVoiceStartEvent, isAtcVoiceEndEvent, isAtcRssiEvent). 12 new web tests. Web tests: 263 → 275.
+- Slice 58: JT9 + FAX frontend type registry — DIGI_MESSAGE_DECODERS expanded to include 'jt9' (4 entries), IMAGE_DECODERS expanded to include 'fax' (2 entries). All 18 decoders now have frontend type coverage.
+- Slice 59: Final docs refresh — AGENTS.md (740+ tests, 275+ web, 18 decoders), STATUS.md header (post slice-58), AI-HANDOFF.md header (18 decoders, 740+1, 275, 13 viz).
+- Each slice: ran full quality gates, ran E2E smoke, committed, pushed via PAT-strip pattern, verified sync.
+- All slices pushed to origin/main: a58b93e (55) → dcd09e5 (56) → f1a1d9c (57) → 82ebf1a (58).
+
+Stage Summary:
+- Four slices shipped: ATC decoder (55), DabServiceListViz (56), type registry (57), JT9/FAX registry (58).
+- Server test count: 728 → 740 (+12 new tests).
+- Web test count: 255 → 275 (+20 new tests).
+- Decoder count: 17 → 18 (added ATC).
+- Frontend viz count: 12 → 13 (added DabServiceListViz).
+- All 18 decoders now have frontend type coverage via 7 decoder family constants.
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.

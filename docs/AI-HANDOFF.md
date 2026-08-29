@@ -1,6 +1,6 @@
 # OpenWebRX+ — Complete Project Handoff (for an AI continuing this work)
 
-**Snapshot date:** 2026-08-29 · **State:** post slice-53 (DAB FIC decoder — 17 decoders total) · **All quality gates green** (728 server tests + 255 web tests; one known `mypy --strict` CLI artifact documented in §4/§5.1, NOT a CI failure)
+**Snapshot date:** 2026-08-29 · **State:** post slice-58 (18 decoders, 740+1 server tests, 275 web tests, 13 viz components) · **All quality gates green**
 
 This document is the single entry point for an AI (or human) picking this
 project up cold. It explains what the project is, the tech stack, exactly
