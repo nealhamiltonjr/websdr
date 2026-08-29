@@ -495,6 +495,39 @@ def create_app(settings: Settings) -> FastAPI:
         if not qsl_log.delete(qso_id):
             raise HTTPException(status_code=404, detail=f"QSO not found: {qso_id}")
 
+    # --- IQ recording endpoints (slice-61) ---
+    from ..recording import IqRecorder
+
+    iq_recorder = IqRecorder(settings.recordings_dir)
+
+    @app.get("/api/recordings")
+    async def list_recordings() -> dict[str, Any]:
+        return {
+            "recordings": iq_recorder.list_recordings(),
+            "active": iq_recorder.active_recordings,
+        }
+
+    @app.post("/api/recordings/{receiver_id}", status_code=201)
+    async def start_recording(receiver_id: str) -> dict[str, Any]:
+        session = get_session(receiver_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"receiver not found: {receiver_id}")
+        if iq_recorder.is_recording(receiver_id):
+            raise HTTPException(status_code=409, detail="already recording")
+        rec = iq_recorder.start(receiver_id, session.center_freq, session.sample_rate)
+        return {"path": str(rec.path), "started_at": rec.started_at}
+
+    @app.delete("/api/recordings/{receiver_id}", status_code=204)
+    async def stop_recording(receiver_id: str) -> None:
+        rec = iq_recorder.stop(receiver_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no active recording for {receiver_id}")
+
+    @app.delete("/api/recordings/file/{filename}", status_code=204)
+    async def delete_recording_file(filename: str) -> None:
+        if not iq_recorder.delete_recording(filename):
+            raise HTTPException(status_code=404, detail=f"recording not found: {filename}")
+
     # Wire up WebSocket endpoints (see ws.py)
     from .ws import register_websocket_routes
 
