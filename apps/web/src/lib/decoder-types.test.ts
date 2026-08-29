@@ -42,9 +42,10 @@ describe('decoder family constants (slice-42)', () => {
     expect(TEXT_DECODERS).toHaveLength(4);
   });
 
-  it('IMAGE_DECODERS includes sstv', () => {
+  it('IMAGE_DECODERS includes sstv and fax', () => {
     expect(IMAGE_DECODERS).toContain('sstv');
-    expect(IMAGE_DECODERS).toHaveLength(1);
+    expect(IMAGE_DECODERS).toContain('fax');
+    expect(IMAGE_DECODERS).toHaveLength(2);
   });
 
   it('ADSB_DECODERS unchanged', () => {
@@ -55,11 +56,12 @@ describe('decoder family constants (slice-42)', () => {
     expect(AIS_DECODERS).toEqual(['ais']);
   });
 
-  it('DIGI_MESSAGE_DECODERS includes ft8, wspr, jt65', () => {
+  it('DIGI_MESSAGE_DECODERS includes ft8, wspr, jt65, jt9', () => {
     expect(DIGI_MESSAGE_DECODERS).toContain('ft8');
     expect(DIGI_MESSAGE_DECODERS).toContain('wspr');
     expect(DIGI_MESSAGE_DECODERS).toContain('jt65');
-    expect(DIGI_MESSAGE_DECODERS).toHaveLength(3);
+    expect(DIGI_MESSAGE_DECODERS).toContain('jt9');
+    expect(DIGI_MESSAGE_DECODERS).toHaveLength(4);
   });
 
   it('PACKET_DECODERS includes ax25', () => {

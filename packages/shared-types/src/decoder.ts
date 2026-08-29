@@ -230,14 +230,16 @@ export function isAisFrameEvent(
 export const TEXT_DECODERS = ['cw', 'rtty', 'psk31', 'olivia'] as const;
 export type TextDecoderName = (typeof TEXT_DECODERS)[number];
 
-/** Decoder names that emit image wire events (slice-42).
+/** Decoder names that emit image wire events (slice-42 + slice-58).
  *
  *  SSTV (slice-40) emits "image" events with base64-encoded RGB pixel
- *  data, plus "scanline" progress and "mode" detection events. */
-export const IMAGE_DECODERS = ['sstv'] as const;
+ *  data, plus "scanline" progress and "mode" detection events.
+ *  FAX (slice-51) emits "image" events with base64-encoded grayscale
+ *  pixel data, plus "scanline" and "start"/"stop" events. */
+export const IMAGE_DECODERS = ['sstv', 'fax'] as const;
 export type ImageDecoderName = (typeof IMAGE_DECODERS)[number];
 
-export const DIGI_MESSAGE_DECODERS = ['ft8', 'wspr', 'jt65'] as const;
+export const DIGI_MESSAGE_DECODERS = ['ft8', 'wspr', 'jt65', 'jt9'] as const;
 export type DigiMessageDecoderName = (typeof DIGI_MESSAGE_DECODERS)[number];
 
 /** Decoder names that emit packet wire events (slice-48).
