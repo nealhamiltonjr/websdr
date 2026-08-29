@@ -1428,3 +1428,22 @@ Stage Summary:
 - Decoder count: 13 → 15 (added JT9 + FAX).
 - Frontend viz count: 11 → 12 (added PacketListViz).
 - All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
+
+---
+Task ID: 52-54
+Agent: super-z (main agent)
+Task: Three-slice autonomous sprint — ACARS decoder, DAB decoder, docs refresh.
+
+Work Log:
+- Slice 52: ACARS decoder — acars_demod.py (1200 baud MSK demodulator with Goertzel mark/space + HDLC-like frame sync 0xEB 0x90 + ETX+CRC collection + CRC-16-CCITT verification), acars_protocol.py (7-char aircraft address + mode + ACK + 2-char label + block ID + text payload), acars.py (plugin emitting message/crc_error events). 15 new tests. Fixed frame termination bug (ETX + 2 CRC bytes). Rebuilt libcsdr+pycsdr (sandbox reset). Server tests: 698 → 713.
+- Slice 53: DAB decoder — dab_demod.py (FIC decoder with CRC-16-CCITT on 32-byte FIBs, FIG 0/1 service label extraction: 4-byte SId + char set + 16-byte ASCII label + PTy), dab.py (plugin emitting service/ensemble events). 15 new tests. v1: FIC decoding only (OFDM + DQPSK + MSC audio deferred to v2). Server tests: 713 → 728.
+- Slice 54: Docs refresh — AGENTS.md test counts (542→728, 178→255), decoder list (6→17), STATUS.md TL;DR rewritten with all 17 decoders + 12 viz components + native Rust AI, health table updated, AI-HANDOFF.md header updated. Docs-only, no code changes.
+- Each slice: ran full quality gates (server tests, ruff, mypy strict, web tests, tsc, eslint, vite build), ran E2E smoke, committed, pushed via PAT-strip pattern, verified sync.
+- All slices pushed to origin/main: fd50883 (slice-52) → 6286aa0 (slice-53) → 6f01421 (slice-54).
+
+Stage Summary:
+- Three slices shipped: ACARS decoder (slice-52), DAB decoder (slice-53), docs refresh (slice-54).
+- Server test count: 698 → 728 (+30 new tests).
+- Decoder count: 15 → 17 (added ACARS + DAB).
+- Docs now honestly reflect the post-slice-53 state: 17 decoders, 728+1 server tests, 255 web tests, 12 frontend viz components, native Rust AI acceleration.
+- All quality gates green on every slice. All commits pushed to origin/main. Working tree clean.
