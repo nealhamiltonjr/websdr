@@ -18,6 +18,7 @@ over WebSocket (see ws.py).
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import structlog
@@ -469,6 +470,30 @@ def create_app(settings: Settings) -> FastAPI:
         if not destroyed:
             raise HTTPException(status_code=404, detail=f"receiver not found: {receiver_id}")
         log.info("destroyed receiver", receiver_id=receiver_id)
+
+    # --- QSL log endpoints (slice-60) ---
+    from ..qsl import QslLog, QsoEntry
+
+    qsl_log = QslLog()
+
+    @app.get("/api/qsl")
+    async def list_qsl(limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        entries = qsl_log.list(limit=limit, offset=offset)
+        return {"qsos": [e.model_dump() for e in entries], "total": qsl_log.count()}
+
+    @app.post("/api/qsl", status_code=201)
+    async def add_qso(entry: QsoEntry) -> QsoEntry:
+        import uuid
+        if not entry.id:
+            entry.id = str(uuid.uuid4())
+        if not entry.timestamp:
+            entry.timestamp = time.time()
+        return qsl_log.add(entry)
+
+    @app.delete("/api/qsl/{qso_id}", status_code=204)
+    async def delete_qso(qso_id: str) -> None:
+        if not qsl_log.delete(qso_id):
+            raise HTTPException(status_code=404, detail=f"QSO not found: {qso_id}")
 
     # Wire up WebSocket endpoints (see ws.py)
     from .ws import register_websocket_routes
