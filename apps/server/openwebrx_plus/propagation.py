@@ -120,7 +120,8 @@ class PropagationService:
     async def _fetch(self) -> PropagationData:
         """Fetch from NOAA SWPC."""
         if self._fetcher is not None:
-            return await self._fetcher()
+            result: PropagationData = await self._fetcher()
+            return result
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(_NOAA_URL)
             resp.raise_for_status()

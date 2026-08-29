@@ -1,0 +1,30 @@
+# OpenWebRX+ — docker-compose.yml (slice-64)
+# Run the full stack with one command: docker compose up
+
+version: "3.9"
+
+services:
+  openwebrx-plus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8073:8073"
+    environment:
+      - OPENWEBRX_HOST=0.0.0.0
+      - OPENWEBRX_PORT=8073
+      - OPENWEBRX_TIER=prod
+      - OPENWEBRX_DEFAULT_SOURCE_TYPE=file
+      # For real hardware, pass through USB devices:
+      # - OPENWEBRX_DEFAULT_SOURCE_TYPE=rtl_sdr
+    volumes:
+      - recordings:/app/.openwebrx-plus/recordings
+      - config:/root/.config/openwebrx-plus
+    # For RTL-SDR USB passthrough:
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+    restart: unless-stopped
+
+volumes:
+  recordings:
+  config:

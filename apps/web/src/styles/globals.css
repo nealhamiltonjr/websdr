@@ -118,3 +118,74 @@ canvas.viz-canvas {
 .owrx-dockview .dv-watermark-container {
   background: var(--color-base-950);
 }
+
+/* ============================================================================
+   Mobile responsive layout (slice-65)
+   Tailwind 4 breakpoint conventions: sm=640px, md=768px, lg=1024px.
+   We add custom media queries for SDR-specific panels.
+   ============================================================================ */
+
+/* Small screens (< 768px): collapse multi-panel layouts to single column. */
+@media (max-width: 767px) {
+  /* Dockview: stack panels vertically on mobile. */
+  .dv-resize-container {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 200px;
+  }
+
+  /* Hide non-essential panels on mobile (debug, settings). */
+  .mobile-hide {
+    display: none !important;
+  }
+
+  /* Reduce font sizes on mobile. */
+  .mobile-sm {
+    font-size: 0.75rem;
+  }
+
+  /* Touch-friendly: increase tap target sizes. */
+  .mobile-touch button,
+  .mobile-touch a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Extra small screens (< 640px): simplify the tuning bar. */
+@media (max-width: 639px) {
+  /* Stack the tuning controls vertically. */
+  .tuning-bar {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* Full-width input fields. */
+  .tuning-bar input {
+    width: 100%;
+  }
+}
+
+/* Large screens (>= 1024px): enable multi-column layouts. */
+@media (min-width: 1024px) {
+  .desktop-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+}
+
+/* Touch device detection (coarse pointer = touch). */
+@media (pointer: coarse) {
+  /* Increase scrollbar width for touch. */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* Prevent text selection on panel headers (double-tap zoom interference). */
+  .panel-header {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
