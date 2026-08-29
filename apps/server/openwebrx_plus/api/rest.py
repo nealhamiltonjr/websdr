@@ -528,6 +528,17 @@ def create_app(settings: Settings) -> FastAPI:
         if not iq_recorder.delete_recording(filename):
             raise HTTPException(status_code=404, detail=f"recording not found: {filename}")
 
+    # --- Propagation intelligence endpoints (slice-62) ---
+    from ..propagation import get_propagation_service
+
+    @app.get("/api/propagation")
+    async def get_propagation() -> dict[str, Any]:
+        svc = get_propagation_service()
+        data = await svc.get()
+        result = data.to_dict()
+        result["band_conditions"] = data.band_conditions
+        return result
+
     # Wire up WebSocket endpoints (see ws.py)
     from .ws import register_websocket_routes
 
