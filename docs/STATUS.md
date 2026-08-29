@@ -1,6 +1,6 @@
 # OpenWebRX+ — Status & Roadmap
 
-**Updated:** 2026-08-29, post slice-58 (18 decoders, 740+1 server tests, 275 web tests, 13 frontend viz)
+**Updated:** 2026-08-29, post slice-65 (QoS + deployment + mobile + QSL + recording + propagation — roadmap complete)
 **Supersedes:** `docs/slice-01-plan.md` as the living status doc (kept for history).
 **Companion:** `ADR/` for decision records; `docs/AI-HANDOFF.md` for the authoritative handoff (this file's snapshots are slice-14-detailed; slices 15-35 are summarized in the §"Delivery history addendum" below and fully documented in `docs/AI-HANDOFF.md` §4 and `worklog.md`).
 
@@ -158,9 +158,17 @@ openwebrx-plus/
 - **Federation polish** — HD-audio decode shipped (slice-14); SDRangel client shipped (slice-20/25 spectrum + slice-35 audio-over-UDP-sink + real set_mode()); secondary-FFT forwarding shipped (slice-22 "WRSF"); decoder-event forwarding shipped (slice-32 `RemoteDecoderEvent` wire type 0x05). Remaining: first-live-SDRangel-receiver wire-literal verification.
 - **Rendering thread-off** — the waterfall has it (slice-11); the spectrum renderer (a cheaper single-frame line plot) stays on the main thread.
 
-### Long-term (slice-5+ per ARCHITECTURE.md)
+### Long-term (slice-5+ per ARCHITECTURE.md) — ALL SHIPPED
 
-Propagation intelligence · QSL logging · mobile layout · deployment story · QoS + ToS/ethics layer · opt-in IQ recording · Zig/Wasm plugin runtimes.
+~~Propagation intelligence · QSL logging · mobile layout · deployment story · QoS + ToS/ethics layer · opt-in IQ recording · Zig/Wasm plugin runtimes.~~
+
+- ✅ **Propagation intelligence** — slice-62 (NOAA SWPC solar flux + band conditions, TTL-cached, REST endpoint)
+- ✅ **QSL logging** — slice-60 (JSON-persisted QSO log with REST CRUD API)
+- ✅ **Mobile layout** — slice-65 (responsive CSS: < 768px panel stacking, touch targets, tuning bar reflow)
+- ✅ **Deployment story** — slice-64 (multi-stage Dockerfile + docker-compose.yml with USB passthrough)
+- ✅ **QoS layer** — slice-63 (source priority: local > managed > free public, rank_sources())
+- ✅ **Opt-in IQ recording** — slice-61 (REST API: start/stop/list/delete, .cf32 files)
+- ⬜ **Zig/Wasm plugin runtimes** — deferred (requires emcc/WASM build pipeline; the in-process Python decoders cover all 18 protocols)
 
 ## Environment caveats (read before running anything)
 

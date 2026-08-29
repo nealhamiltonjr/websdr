@@ -1,6 +1,6 @@
 # OpenWebRX+ — Complete Project Handoff (for an AI continuing this work)
 
-**Snapshot date:** 2026-08-29 · **State:** post slice-58 (18 decoders, 740+1 server tests, 275 web tests, 13 viz components) · **All quality gates green**
+**Snapshot date:** 2026-08-29 · **State:** post slice-65 (roadmap complete — 18 decoders, QSL logging, IQ recording, propagation, QoS, deployment, mobile) · **All quality gates green** (769 server tests + 275 web tests)
 
 This document is the single entry point for an AI (or human) picking this
 project up cold. It explains what the project is, the tech stack, exactly

@@ -42,7 +42,7 @@ and `docs/STATUS.md` (living status snapshot).
 
 ```bash
 # from the repo root
-scripts/run-server-tests.sh                              # 740+ tests, ~90 s
+scripts/run-server-tests.sh                              # 769+ tests, ~130 s
 cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit  # 275+ tests, types
 cd apps/web && pnpm run build                            # vite production build
 cd apps/server && .venv/bin/ruff check .                 # lint clean
@@ -119,7 +119,7 @@ Open follow-ups:
 - <deferred item, if any>
 
 Quality gates:
-- server: 740/740 tests, mypy strict, ruff clean
+- server: 769/769 tests, mypy strict, ruff clean
 - web: 275/275 tests, tsc clean, vite build clean
 ```
 
