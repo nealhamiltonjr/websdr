@@ -28,5 +28,6 @@ import './DigiMessageListViz';
 import './TextStreamViz';
 import './ImageViz';
 import './PacketListViz';
+import './DabServiceListViz';
 
 export { getViz, listViz } from './registry';
