@@ -13,6 +13,9 @@ import {
   IMAGE_DECODERS,
   DIGI_MESSAGE_DECODERS,
   PACKET_DECODERS,
+  ACARS_DECODERS,
+  DAB_DECODERS,
+  ATC_DECODERS,
   isTextCharEvent,
   isTextSnapshotEvent,
   isImageEvent,
@@ -20,6 +23,13 @@ import {
   isImageModeEvent,
   isPacketEvent,
   isPacketCrcErrorEvent,
+  isAcarsMessageEvent,
+  isAcarsCrcErrorEvent,
+  isDabServiceEvent,
+  isDabEnsembleEvent,
+  isAtcVoiceStartEvent,
+  isAtcVoiceEndEvent,
+  isAtcRssiEvent,
   type DecoderEventEnvelope,
 } from '@openwebrx-plus/shared-types';
 
@@ -262,5 +272,105 @@ describe('isPacketCrcErrorEvent', () => {
       event: { kind: 'packet', ts: 0, source: 'X', destination: 'Y', digipeaters: [], control: 0, frame_type: 'I', info_hex: '', info_text: '', packet_index: 0 },
     };
     expect(isPacketCrcErrorEvent(env)).toBe(false);
+  });
+});
+
+// ============================================================================
+// ACARS / DAB / ATC type guards (slice-57)
+// ============================================================================
+
+describe('ACARS + DAB + ATC family constants', () => {
+  it('ACARS_DECODERS includes acars', () => {
+    expect(ACARS_DECODERS).toContain('acars');
+    expect(ACARS_DECODERS).toHaveLength(1);
+  });
+  it('DAB_DECODERS includes dab', () => {
+    expect(DAB_DECODERS).toContain('dab');
+    expect(DAB_DECODERS).toHaveLength(1);
+  });
+  it('ATC_DECODERS includes atc', () => {
+    expect(ATC_DECODERS).toContain('atc');
+    expect(ATC_DECODERS).toHaveLength(1);
+  });
+});
+
+describe('isAcarsMessageEvent', () => {
+  it('returns true for acars message events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'acars', receiverId: 'rx-1',
+      event: { kind: 'message', ts: 1, address: 'N123AB', mode: '2', ack: ' ', label: 'H1', block_id: '#', text: 'hi', raw_hex: '', message_index: 0 } as any,
+    };
+    expect(isAcarsMessageEvent(env)).toBe(true);
+  });
+  it('returns false for non-acars decoders', () => {
+    const env: DecoderEventEnvelope = { type: 'decoder', decoder: 'cw', receiverId: 'rx-1', event: { kind: 'message', ts: 1 } as any };
+    expect(isAcarsMessageEvent(env)).toBe(false);
+  });
+});
+
+describe('isDabServiceEvent', () => {
+  it('returns true for dab service events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'dab', receiverId: 'rx-1',
+      event: { kind: 'service', ts: 1, service_id: 1, label: 'Radio', program_type: 0, subchannel_id: null } as any,
+    };
+    expect(isDabServiceEvent(env)).toBe(true);
+  });
+});
+
+describe('isDabEnsembleEvent', () => {
+  it('returns true for dab ensemble events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'dab', receiverId: 'rx-1',
+      event: { kind: 'ensemble', ts: 1, services: [], ensemble_index: 0 } as any,
+    };
+    expect(isDabEnsembleEvent(env)).toBe(true);
+  });
+});
+
+describe('isAtcVoiceStartEvent', () => {
+  it('returns true for atc voice_start', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'atc', receiverId: 'rx-1',
+      event: { kind: 'voice_start', ts: 1, rssi_dbfs: -20, frequency_hz: 118000000 } as any,
+    };
+    expect(isAtcVoiceStartEvent(env)).toBe(true);
+  });
+});
+
+describe('isAtcVoiceEndEvent', () => {
+  it('returns true for atc voice_end', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'atc', receiverId: 'rx-1',
+      event: { kind: 'voice_end', ts: 1, rssi_dbfs: -50, frequency_hz: 118000000 } as any,
+    };
+    expect(isAtcVoiceEndEvent(env)).toBe(true);
+  });
+});
+
+describe('isAtcRssiEvent', () => {
+  it('returns true for atc rssi', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'atc', receiverId: 'rx-1',
+      event: { kind: 'rssi', ts: 1, rssi_dbfs: -30, frequency_hz: 118000000 } as any,
+    };
+    expect(isAtcRssiEvent(env)).toBe(true);
+  });
+});
+
+describe('isAcarsCrcErrorEvent', () => {
+  it('returns true for acars crc_error', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'acars', receiverId: 'rx-1',
+      event: { kind: 'crc_error', ts: 1, reason: 'bad', raw_hex: '00', length: 1 } as any,
+    };
+    expect(isAcarsCrcErrorEvent(env)).toBe(true);
+  });
+  it('returns false for message events', () => {
+    const env: DecoderEventEnvelope = {
+      type: 'decoder', decoder: 'acars', receiverId: 'rx-1',
+      event: { kind: 'message', ts: 1, address: 'X', mode: '', ack: '', label: '', block_id: '', text: '', raw_hex: '', message_index: 0 } as any,
+    };
+    expect(isAcarsCrcErrorEvent(env)).toBe(false);
   });
 });

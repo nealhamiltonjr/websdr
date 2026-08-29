@@ -248,6 +248,21 @@ export type DigiMessageDecoderName = (typeof DIGI_MESSAGE_DECODERS)[number];
 export const PACKET_DECODERS = ['ax25'] as const;
 export type PacketDecoderName = (typeof PACKET_DECODERS)[number];
 
+/** Decoder names that emit ACARS aircraft messages (slice-57).
+ *  ACARS (slice-52) emits "message" events with aircraft address + label + text. */
+export const ACARS_DECODERS = ['acars'] as const;
+export type AcarsDecoderName = (typeof ACARS_DECODERS)[number];
+
+/** Decoder names that emit DAB service events (slice-57).
+ *  DAB (slice-53) emits "service" + "ensemble" events with station labels. */
+export const DAB_DECODERS = ['dab'] as const;
+export type DabDecoderName = (typeof DAB_DECODERS)[number];
+
+/** Decoder names that emit ATC voice activity events (slice-57).
+ *  ATC (slice-55) emits "voice_start" / "voice_end" / "rssi" events. */
+export const ATC_DECODERS = ['atc'] as const;
+export type AtcDecoderName = (typeof ATC_DECODERS)[number];
+
 /** FT8 (or similar audio-band digi-mode) "message" event — one
  *  decoded free-form text message (callsign, grid, signal report,
  *  etc.). The decoder plugin emits these as IQ is fed in. */
@@ -474,4 +489,122 @@ export function isPacketCrcErrorEvent(
     packetDecoderNames.includes(envelope.decoder) &&
     envelope.event.kind === 'crc_error'
   );
+}
+
+// ---------------------------------------------------------------------------
+// ACARS decoder events (slice-57)
+// ---------------------------------------------------------------------------
+
+const acarsDecoderNames: readonly string[] = ACARS_DECODERS;
+
+export interface AcarsMessageEvent {
+  kind: 'message';
+  ts: number;
+  address: string;
+  mode: string;
+  ack: string;
+  label: string;
+  block_id: string;
+  text: string;
+  raw_hex: string;
+  message_index: number;
+}
+
+export interface AcarsCrcErrorEvent {
+  kind: 'crc_error';
+  ts: number;
+  reason: string;
+  raw_hex: string;
+  length: number;
+}
+
+export function isAcarsMessageEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AcarsMessageEvent } {
+  return acarsDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'message';
+}
+
+export function isAcarsCrcErrorEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AcarsCrcErrorEvent } {
+  return acarsDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'crc_error';
+}
+
+// ---------------------------------------------------------------------------
+// DAB decoder events (slice-57)
+// ---------------------------------------------------------------------------
+
+const dabDecoderNames: readonly string[] = DAB_DECODERS;
+
+export interface DabServiceEvent {
+  kind: 'service';
+  ts: number;
+  service_id: number;
+  label: string;
+  program_type: number;
+  subchannel_id: number | null;
+}
+
+export interface DabEnsembleEvent {
+  kind: 'ensemble';
+  ts: number;
+  services: Array<{ service_id: number; label: string; program_type: number; subchannel_id: number | null }>;
+  ensemble_index: number;
+}
+
+export function isDabServiceEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: DabServiceEvent } {
+  return dabDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'service';
+}
+
+export function isDabEnsembleEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: DabEnsembleEvent } {
+  return dabDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'ensemble';
+}
+
+// ---------------------------------------------------------------------------
+// ATC voice activity events (slice-57)
+// ---------------------------------------------------------------------------
+
+const atcDecoderNames: readonly string[] = ATC_DECODERS;
+
+export interface AtcVoiceStartEvent {
+  kind: 'voice_start';
+  ts: number;
+  rssi_dbfs: number;
+  frequency_hz: number;
+}
+
+export interface AtcVoiceEndEvent {
+  kind: 'voice_end';
+  ts: number;
+  rssi_dbfs: number;
+  frequency_hz: number;
+}
+
+export interface AtcRssiEvent {
+  kind: 'rssi';
+  ts: number;
+  rssi_dbfs: number;
+  frequency_hz: number;
+}
+
+export function isAtcVoiceStartEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AtcVoiceStartEvent } {
+  return atcDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'voice_start';
+}
+
+export function isAtcVoiceEndEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AtcVoiceEndEvent } {
+  return atcDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'voice_end';
+}
+
+export function isAtcRssiEvent(
+  envelope: DecoderEventEnvelope,
+): envelope is DecoderEventEnvelope & { event: AtcRssiEvent } {
+  return atcDecoderNames.includes(envelope.decoder) && envelope.event.kind === 'rssi';
 }
